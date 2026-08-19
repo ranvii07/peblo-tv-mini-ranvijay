@@ -7,7 +7,7 @@ reporting it as healthy is how outages stay invisible until a user finds them.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Response
 from fastapi.responses import JSONResponse
@@ -54,7 +54,7 @@ def health(
         if run is None:
             checks["current_catalog"] = None
         else:
-            age = (datetime.now(timezone.utc) - run.started_at).total_seconds()
+            age = (datetime.now(UTC) - run.started_at).total_seconds()
             checks["current_catalog"] = {
                 "run_id": run.id,
                 "age_seconds": int(age),
@@ -84,8 +84,10 @@ def media(key: str, storage: Storage = Depends(get_storage)) -> Response:
 
     ext = key.rsplit(".", 1)[-1].lower()
     content_type = {
-        "jpg": "image/jpeg", "jpeg": "image/jpeg",
-        "png": "image/png", "json": "application/json",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+        "json": "application/json",
     }.get(ext, "application/octet-stream")
     return Response(
         data,

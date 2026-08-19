@@ -37,8 +37,9 @@ _ALLOWED_FORMATS = {
 class ArtworkValidationError(Exception):
     """Raised when an upload fails a rule. Carries an editor-readable payload."""
 
-    def __init__(self, code: str, message: str, expected: dict | None = None,
-                 received: dict | None = None):
+    def __init__(
+        self, code: str, message: str, expected: dict | None = None, received: dict | None = None
+    ):
         super().__init__(message)
         self.code = code
         self.message = message

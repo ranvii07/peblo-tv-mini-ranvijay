@@ -55,10 +55,9 @@ def effective_thumbnail(
     episode_id: int, show_id: int, artwork: dict[tuple[str, int], set[str]]
 ) -> bool:
     """An episode's thumbnail may come from the episode or fall back to its show."""
-    return (
-        ArtworkKind.thumbnail.value in artwork.get((OwnerType.episode.value, episode_id), set())
-        or ArtworkKind.thumbnail.value in artwork.get((OwnerType.show.value, show_id), set())
-    )
+    return ArtworkKind.thumbnail.value in artwork.get(
+        (OwnerType.episode.value, episode_id), set()
+    ) or ArtworkKind.thumbnail.value in artwork.get((OwnerType.show.value, show_id), set())
 
 
 def episode_blockers(
@@ -73,63 +72,73 @@ def episode_blockers(
     label = f"S{season.number}E{episode.number} – {episode.title}"
 
     if not episode.duration_seconds or episode.duration_seconds <= 0:
-        issues.append(Issue(
-            code="missing_duration",
-            severity="blocker",
-            message=(
-                f"Episode '{label}' has no duration. Open the episode and enter how long "
-                "it runs, in minutes and seconds."
-            ),
-            entity_type="episode",
-            entity_id=episode.id,
-        ))
+        issues.append(
+            Issue(
+                code="missing_duration",
+                severity="blocker",
+                message=(
+                    f"Episode '{label}' has no duration. Open the episode and enter how long "
+                    "it runs, in minutes and seconds."
+                ),
+                entity_type="episode",
+                entity_id=episode.id,
+            )
+        )
 
     if not effective_thumbnail(episode.id, show.id, artwork):
-        issues.append(Issue(
-            code="missing_thumbnail",
-            severity="blocker",
-            message=(
-                f"Episode '{label}' has no thumbnail image. Upload a "
-                f"{reference.spec('thumbnail')['target_px'][0]}x"
-                f"{reference.spec('thumbnail')['target_px'][1]} thumbnail on the episode, "
-                "or add one to the show so all its episodes can use it."
-            ),
-            entity_type="episode",
-            entity_id=episode.id,
-        ))
+        issues.append(
+            Issue(
+                code="missing_thumbnail",
+                severity="blocker",
+                message=(
+                    f"Episode '{label}' has no thumbnail image. Upload a "
+                    f"{reference.spec('thumbnail')['target_px'][0]}x"
+                    f"{reference.spec('thumbnail')['target_px'][1]} thumbnail on the episode, "
+                    "or add one to the show so all its episodes can use it."
+                ),
+                entity_type="episode",
+                entity_id=episode.id,
+            )
+        )
 
     if episode.language not in reference.languages:
-        issues.append(Issue(
-            code="unknown_language",
-            severity="blocker",
-            message=(
-                f"Episode '{label}' is set to language '{episode.language}', which isn't "
-                f"one of the supported languages ({', '.join(reference.languages)}). "
-                "Pick a supported language."
-            ),
-            entity_type="episode",
-            entity_id=episode.id,
-        ))
+        issues.append(
+            Issue(
+                code="unknown_language",
+                severity="blocker",
+                message=(
+                    f"Episode '{label}' is set to language '{episode.language}', which isn't "
+                    f"one of the supported languages ({', '.join(reference.languages)}). "
+                    "Pick a supported language."
+                ),
+                entity_type="episode",
+                entity_id=episode.id,
+            )
+        )
 
     if episode.seed_issue:
-        issues.append(Issue(
-            code="imported_with_problem",
-            severity="blocker",
-            message=(
-                f"Episode '{label}' was imported with a problem that needs a human "
-                f"decision: {episode.seed_issue}. Review it, then either fix the episode "
-                "or delete it."
-            ),
-            entity_type="episode",
-            entity_id=episode.id,
-            details={"seed_issue": episode.seed_issue},
-        ))
+        issues.append(
+            Issue(
+                code="imported_with_problem",
+                severity="blocker",
+                message=(
+                    f"Episode '{label}' was imported with a problem that needs a human "
+                    f"decision: {episode.seed_issue}. Review it, then either fix the episode "
+                    "or delete it."
+                ),
+                entity_type="episode",
+                entity_id=episode.id,
+                details={"seed_issue": episode.seed_issue},
+            )
+        )
 
     return issues
 
 
 def show_blockers(
-    show: Show, reference: Reference, artwork: dict[tuple[str, int], set[str]],
+    show: Show,
+    reference: Reference,
+    artwork: dict[tuple[str, int], set[str]],
     publishable_episodes: int,
 ) -> list[Issue]:
     """Rules a show must satisfy to be published."""
@@ -137,68 +146,78 @@ def show_blockers(
     present = artwork.get((OwnerType.show.value, show.id), set())
 
     if not show.section:
-        issues.append(Issue(
-            code="missing_section",
-            severity="blocker",
-            message=(
-                f"'{show.title}' has no section, so there is nowhere to show it. Choose "
-                f"one of: {', '.join(reference.sections)}."
-            ),
-            entity_type="show",
-            entity_id=show.id,
-        ))
+        issues.append(
+            Issue(
+                code="missing_section",
+                severity="blocker",
+                message=(
+                    f"'{show.title}' has no section, so there is nowhere to show it. Choose "
+                    f"one of: {', '.join(reference.sections)}."
+                ),
+                entity_type="show",
+                entity_id=show.id,
+            )
+        )
     elif show.section not in reference.sections:
-        issues.append(Issue(
-            code="unknown_section",
-            severity="blocker",
-            message=(
-                f"'{show.title}' is in section '{show.section}', which no longer exists. "
-                f"Choose one of: {', '.join(reference.sections)}."
-            ),
-            entity_type="show",
-            entity_id=show.id,
-        ))
+        issues.append(
+            Issue(
+                code="unknown_section",
+                severity="blocker",
+                message=(
+                    f"'{show.title}' is in section '{show.section}', which no longer exists. "
+                    f"Choose one of: {', '.join(reference.sections)}."
+                ),
+                entity_type="show",
+                entity_id=show.id,
+            )
+        )
 
     for kind in (ArtworkKind.poster, ArtworkKind.banner):
         if kind.value not in present:
             w, h = reference.spec(kind.value)["target_px"]
-            issues.append(Issue(
-                code=f"missing_{kind.value}",
+            issues.append(
+                Issue(
+                    code=f"missing_{kind.value}",
+                    severity="blocker",
+                    message=(
+                        f"'{show.title}' has no {kind.value} image. Upload a {w}x{h} "
+                        f"{kind.value} on the show's artwork panel."
+                    ),
+                    entity_type="show",
+                    entity_id=show.id,
+                )
+            )
+
+    if publishable_episodes == 0:
+        issues.append(
+            Issue(
+                code="no_publishable_episodes",
                 severity="blocker",
                 message=(
-                    f"'{show.title}' has no {kind.value} image. Upload a {w}x{h} "
-                    f"{kind.value} on the show's artwork panel."
+                    f"'{show.title}' has no episodes ready to publish. Fix the problems on "
+                    "its episodes, or leave the show as a draft."
                 ),
                 entity_type="show",
                 entity_id=show.id,
-            ))
-
-    if publishable_episodes == 0:
-        issues.append(Issue(
-            code="no_publishable_episodes",
-            severity="blocker",
-            message=(
-                f"'{show.title}' has no episodes ready to publish. Fix the problems on "
-                "its episodes, or leave the show as a draft."
-            ),
-            entity_type="show",
-            entity_id=show.id,
-        ))
+            )
+        )
 
     unknown_categories = [c for c in (show.categories or []) if c not in reference.categories]
     if unknown_categories:
-        issues.append(Issue(
-            code="unknown_categories",
-            severity="warning",
-            message=(
-                f"'{show.title}' uses categories that aren't in the approved list: "
-                f"{', '.join(unknown_categories)}. They won't be searchable until they "
-                "are replaced with approved ones."
-            ),
-            entity_type="show",
-            entity_id=show.id,
-            details={"unknown": unknown_categories},
-        ))
+        issues.append(
+            Issue(
+                code="unknown_categories",
+                severity="warning",
+                message=(
+                    f"'{show.title}' uses categories that aren't in the approved list: "
+                    f"{', '.join(unknown_categories)}. They won't be searchable until they "
+                    "are replaced with approved ones."
+                ),
+                entity_type="show",
+                entity_id=show.id,
+                details={"unknown": unknown_categories},
+            )
+        )
 
     return issues
 
@@ -213,7 +232,8 @@ def collect_issues(db: Session, reference: Reference) -> dict:
     artwork = _artwork_index(db)
 
     shows = db.scalars(
-        select(Show).options(selectinload(Show.seasons).selectinload(Season.episodes))
+        select(Show)
+        .options(selectinload(Show.seasons).selectinload(Season.episodes))
         .order_by(Show.title)
     ).all()
 
@@ -234,9 +254,7 @@ def collect_issues(db: Session, reference: Reference) -> dict:
                     # A draft episode is an intentional omission, not an error. Its
                     # problems are still reported if it was quarantined at import.
                     if episode.seed_issue:
-                        issues.extend(
-                            episode_blockers(episode, show, season, reference, artwork)
-                        )
+                        issues.extend(episode_blockers(episode, show, season, reference, artwork))
                     continue
                 ep_issues = episode_blockers(episode, show, season, reference, artwork)
                 issues.extend(ep_issues)
@@ -248,14 +266,16 @@ def collect_issues(db: Session, reference: Reference) -> dict:
         if issues:
             if any(i.severity == "blocker" for i in issues):
                 blocking = True
-            per_show.append({
-                "show_id": show.id,
-                "title": show.title,
-                "section": show.section,
-                "blocker_count": sum(1 for i in issues if i.severity == "blocker"),
-                "warning_count": sum(1 for i in issues if i.severity == "warning"),
-                "issues": [i.to_dict() for i in issues],
-            })
+            per_show.append(
+                {
+                    "show_id": show.id,
+                    "title": show.title,
+                    "section": show.section,
+                    "blocker_count": sum(1 for i in issues if i.severity == "blocker"),
+                    "warning_count": sum(1 for i in issues if i.severity == "warning"),
+                    "issues": [i.to_dict() for i in issues],
+                }
+            )
 
     # ---- cross-show observations --------------------------------------------------
     # Two shows whose episode titles line up one-for-one in different languages are
@@ -276,19 +296,21 @@ def collect_issues(db: Session, reference: Reference) -> dict:
             seen.add((a_id, b_id))
             overlap = a_titles & b_titles
             if len(overlap) >= min(len(a_titles), len(b_titles)) and len(overlap) >= 3:
-                global_issues.append(Issue(
-                    code="possible_duplicate_shows",
-                    severity="warning",
-                    message=(
-                        f"'{a_title}' and '{b_title}' have the same {len(overlap)} episode "
-                        "titles. They may be language variants of one show that were "
-                        "imported separately. If so, give the matching episodes a shared "
-                        "content group instead of keeping two shows. Left as-is for now."
-                    ),
-                    entity_type="show",
-                    entity_id=a_id,
-                    details={"other_show_id": b_id, "shared_titles": sorted(overlap)},
-                ))
+                global_issues.append(
+                    Issue(
+                        code="possible_duplicate_shows",
+                        severity="warning",
+                        message=(
+                            f"'{a_title}' and '{b_title}' have the same {len(overlap)} episode "
+                            "titles. They may be language variants of one show that were "
+                            "imported separately. If so, give the matching episodes a shared "
+                            "content group instead of keeping two shows. Left as-is for now."
+                        ),
+                        entity_type="show",
+                        entity_id=a_id,
+                        details={"other_show_id": b_id, "shared_titles": sorted(overlap)},
+                    )
+                )
 
     return {
         "blocking_publish": blocking,

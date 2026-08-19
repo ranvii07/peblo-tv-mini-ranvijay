@@ -52,7 +52,9 @@ def main() -> int:
         else:
             log.info(
                 "ingested %s shows, %s seasons, %s episodes",
-                result["shows"], result["seasons"], result["episodes"],
+                result["shows"],
+                result["seasons"],
+                result["episodes"],
             )
             for finding in result["findings"]:
                 log.warning("seed finding: %s", finding)

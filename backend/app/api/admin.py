@@ -63,9 +63,7 @@ def publish_runs(
     _: User = Depends(require_user),
     limit: int = 25,
 ) -> dict:
-    runs = db.scalars(
-        select(PublishRun).order_by(PublishRun.started_at.desc()).limit(limit)
-    ).all()
+    runs = db.scalars(select(PublishRun).order_by(PublishRun.started_at.desc()).limit(limit)).all()
     return {
         "items": [
             {

@@ -30,7 +30,7 @@ from app.models import (
     Status,
     User,
 )
-from app.services.validation import episode_blockers, show_blockers, _artwork_index
+from app.services.validation import _artwork_index, episode_blockers, show_blockers
 from app.storage import Storage, get_storage
 
 router = APIRouter(prefix="/api", tags=["content"])
@@ -80,12 +80,9 @@ class EpisodePatch(BaseModel):
 
 
 # --------------------------------------------------------------------------- helpers
-def _artwork_for(db: Session, owner_type: OwnerType, owner_id: int,
-                 storage: Storage) -> dict:
+def _artwork_for(db: Session, owner_type: OwnerType, owner_id: int, storage: Storage) -> dict:
     rows = db.scalars(
-        select(Artwork).where(
-            Artwork.owner_type == owner_type, Artwork.owner_id == owner_id
-        )
+        select(Artwork).where(Artwork.owner_type == owner_type, Artwork.owner_id == owner_id)
     ).all()
     return {
         a.kind.value: {
@@ -138,8 +135,9 @@ def _show_detail(show: Show, db: Session, storage: Storage) -> dict:
     }
 
 
-def _validate_against_reference(section: str | None, categories: list[str] | None,
-                                reference: Reference) -> None:
+def _validate_against_reference(
+    section: str | None, categories: list[str] | None, reference: Reference
+) -> None:
     if section is not None and section not in reference.sections:
         raise unprocessable(
             "unknown_section",
@@ -203,19 +201,21 @@ def list_shows(
     items = []
     for show in rows:
         episodes = [e for s in show.seasons for e in s.episodes]
-        items.append({
-            "id": show.id,
-            "slug": show.slug,
-            "title": show.title,
-            "section": show.section,
-            "status": show.status.value,
-            "featured": show.featured,
-            "categories": list(show.categories or []),
-            "episode_count": len(episodes),
-            "languages": sorted({e.language for e in episodes}),
-            "updated_at": show.updated_at.isoformat() if show.updated_at else None,
-            "artwork": _artwork_for(db, OwnerType.show, show.id, storage),
-        })
+        items.append(
+            {
+                "id": show.id,
+                "slug": show.slug,
+                "title": show.title,
+                "section": show.section,
+                "status": show.status.value,
+                "featured": show.featured,
+                "categories": list(show.categories or []),
+                "episode_count": len(episodes),
+                "languages": sorted({e.language for e in episodes}),
+                "updated_at": show.updated_at.isoformat() if show.updated_at else None,
+                "artwork": _artwork_for(db, OwnerType.show, show.id, storage),
+            }
+        )
 
     return {
         "items": items,
@@ -261,7 +261,8 @@ def get_show(
     _: User = Depends(require_user),
 ) -> dict:
     show = db.scalar(
-        select(Show).where(Show.id == show_id)
+        select(Show)
+        .where(Show.id == show_id)
         .options(selectinload(Show.seasons).selectinload(Season.episodes))
     )
     if show is None:
@@ -279,7 +280,8 @@ def update_show(
     _: User = Depends(require_user),
 ) -> dict:
     show = db.scalar(
-        select(Show).where(Show.id == show_id)
+        select(Show)
+        .where(Show.id == show_id)
         .options(selectinload(Show.seasons).selectinload(Season.episodes))
     )
     if show is None:
@@ -303,12 +305,12 @@ def update_show(
             for e in s.episodes
             if e.status is Status.published
             and not any(
-                i.severity == "blocker"
-                for i in episode_blockers(e, show, s, reference, artwork)
+                i.severity == "blocker" for i in episode_blockers(e, show, s, reference, artwork)
             )
         )
         blockers = [
-            i for i in show_blockers(show, reference, artwork, publishable)
+            i
+            for i in show_blockers(show, reference, artwork, publishable)
             if i.severity == "blocker"
         ]
         if blockers:
@@ -380,8 +382,13 @@ def create_season(
             f"This show already has a season {payload.number}.",
         ) from None
     db.refresh(season)
-    return {"id": season.id, "show_id": season.show_id, "number": season.number,
-            "title": season.title, "episodes": []}
+    return {
+        "id": season.id,
+        "show_id": season.show_id,
+        "number": season.number,
+        "title": season.title,
+        "episodes": [],
+    }
 
 
 @router.delete("/seasons/{season_id}", status_code=204)
@@ -471,7 +478,8 @@ def update_episode(
         show = db.get(Show, season.show_id)
         artwork = _artwork_index(db)
         blockers = [
-            i for i in episode_blockers(episode, show, season, reference, artwork)
+            i
+            for i in episode_blockers(episode, show, season, reference, artwork)
             if i.severity == "blocker"
         ]
         if blockers:

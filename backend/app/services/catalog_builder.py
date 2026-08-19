@@ -53,7 +53,7 @@ def _build_entries(episodes: list[dict]) -> list[dict]:
         groups.setdefault(key, []).append(ep)
 
     entries: list[dict] = []
-    for key, members in groups.items():
+    for members in groups.values():
         variants_sorted = sorted(members, key=lambda e: e["language"])
         canonical = _canonical_variant(variants_sorted)
         entries.append(
@@ -171,9 +171,9 @@ def build_catalog(
 
 def canonical_bytes(catalog: dict) -> bytes:
     """Serialize deterministically. Same content in, same bytes out, always."""
-    return json.dumps(
-        catalog, sort_keys=True, ensure_ascii=False, separators=(",", ":")
-    ).encode("utf-8")
+    return json.dumps(catalog, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
 
 
 def catalog_checksum(catalog: dict) -> str:

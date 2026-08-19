@@ -52,8 +52,9 @@ _SAMPLE_FOR_KIND = {
 }
 
 
-def _artwork_key(owner_type: OwnerType, owner_id: int, kind: ArtworkKind, checksum: str,
-                 ext: str) -> str:
+def _artwork_key(
+    owner_type: OwnerType, owner_id: int, kind: ArtworkKind, checksum: str, ext: str
+) -> str:
     return f"artwork/{owner_type.value}/{owner_id}/{kind.value}/{checksum[:12]}.{ext}"
 
 
@@ -69,8 +70,9 @@ def seed_users(db: Session) -> None:
     db.commit()
 
 
-def seed_content(db: Session, reference: Reference, storage: Storage,
-                 seed_dir: Path) -> dict[str, Any]:
+def seed_content(
+    db: Session, reference: Reference, storage: Storage, seed_dir: Path
+) -> dict[str, Any]:
     """Load seed_shows.json. Idempotent: does nothing if shows already exist."""
     if db.scalar(select(Show).limit(1)) is not None:
         return {"skipped": True, "reason": "content already present"}
@@ -216,12 +218,19 @@ def seed_content(db: Session, reference: Reference, storage: Storage,
                 data, v = sample_bytes(kind)
                 key = _artwork_key(OwnerType.episode, episode.id, kind, v.checksum, v.extension)
                 storage.put(key, data, v.content_type)
-                db.add(Artwork(
-                    owner_type=OwnerType.episode, owner_id=episode.id, kind=kind,
-                    storage_key=key, width=v.width, height=v.height,
-                    size_bytes=v.size_bytes, content_type=v.content_type,
-                    checksum=v.checksum,
-                ))
+                db.add(
+                    Artwork(
+                        owner_type=OwnerType.episode,
+                        owner_id=episode.id,
+                        kind=kind,
+                        storage_key=key,
+                        width=v.width,
+                        height=v.height,
+                        size_bytes=v.size_bytes,
+                        content_type=v.content_type,
+                        checksum=v.checksum,
+                    )
+                )
 
     for slug, kinds in show_slots.items():
         for kind in sorted(kinds, key=lambda k: k.value):
@@ -229,11 +238,19 @@ def seed_content(db: Session, reference: Reference, storage: Storage,
             show_id = shows[slug].id
             key = _artwork_key(OwnerType.show, show_id, kind, v.checksum, v.extension)
             storage.put(key, data, v.content_type)
-            db.add(Artwork(
-                owner_type=OwnerType.show, owner_id=show_id, kind=kind,
-                storage_key=key, width=v.width, height=v.height,
-                size_bytes=v.size_bytes, content_type=v.content_type, checksum=v.checksum,
-            ))
+            db.add(
+                Artwork(
+                    owner_type=OwnerType.show,
+                    owner_id=show_id,
+                    kind=kind,
+                    storage_key=key,
+                    width=v.width,
+                    height=v.height,
+                    size_bytes=v.size_bytes,
+                    content_type=v.content_type,
+                    checksum=v.checksum,
+                )
+            )
 
     db.commit()
 

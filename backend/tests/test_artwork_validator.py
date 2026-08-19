@@ -30,11 +30,13 @@ def load(name: str) -> bytes:
 def make_image(width: int, height: int, fmt: str = "JPEG", quality: int = 85) -> bytes:
     """A smooth gradient: compresses well, so size never accidentally trips the ceiling."""
     img = Image.new("RGB", (width, height))
-    img.putdata([
-        ((x * 255) // max(width - 1, 1), (y * 255) // max(height - 1, 1), 128)
-        for y in range(height)
-        for x in range(width)
-    ])
+    img.putdata(
+        [
+            ((x * 255) // max(width - 1, 1), (y * 255) // max(height - 1, 1), 128)
+            for y in range(height)
+            for x in range(width)
+        ]
+    )
     buf = io.BytesIO()
     img.save(buf, format=fmt, quality=quality)
     return buf.getvalue()
@@ -46,10 +48,12 @@ def make_heavy_image(width: int, height: int) -> bytes:
 
     rng = random.Random(0)
     img = Image.new("RGB", (width, height))
-    img.putdata([
-        (rng.randrange(256), rng.randrange(256), rng.randrange(256))
-        for _ in range(width * height)
-    ])
+    img.putdata(
+        [
+            (rng.randrange(256), rng.randrange(256), rng.randrange(256))
+            for _ in range(width * height)
+        ]
+    )
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=100, subsampling=0)
     return buf.getvalue()

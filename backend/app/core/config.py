@@ -5,6 +5,7 @@ sections, categories, languages and artwork specs are all read from it at runtim
 that adding a language or retargeting a poster size is a data change, not a deploy.
 Nothing in this codebase hardcodes those values.
 """
+
 from __future__ import annotations
 
 import json

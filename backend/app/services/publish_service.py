@@ -39,7 +39,7 @@ committed transaction. That is the whole atomicity argument.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session, selectinload
@@ -48,7 +48,6 @@ from app.core.config import Reference
 from app.models import (
     Artwork,
     ArtworkKind,
-    Episode,
     OwnerType,
     PublishRun,
     PublishStatus,
@@ -105,38 +104,45 @@ def build_snapshot(db: Session, storage: Storage) -> dict:
                 # reach the catalogue even if a status was set by some other path.
                 if not ep.duration_seconds or ep.duration_seconds <= 0:
                     continue
-                thumb = episode_art.get(ep.id, {}).get(ArtworkKind.thumbnail.value) or \
-                    show_art.get(show.id, {}).get(ArtworkKind.thumbnail.value)
+                thumb = episode_art.get(ep.id, {}).get(ArtworkKind.thumbnail.value) or show_art.get(
+                    show.id, {}
+                ).get(ArtworkKind.thumbnail.value)
                 if not thumb:
                     continue
-                episodes.append({
-                    "id": ep.id,
-                    "number": ep.number,
-                    "title": ep.title,
-                    "synopsis": ep.synopsis,
-                    "duration_seconds": ep.duration_seconds,
-                    "language": ep.language,
-                    "content_group": ep.content_group,
-                    "thumbnail": thumb,
-                })
+                episodes.append(
+                    {
+                        "id": ep.id,
+                        "number": ep.number,
+                        "title": ep.title,
+                        "synopsis": ep.synopsis,
+                        "duration_seconds": ep.duration_seconds,
+                        "language": ep.language,
+                        "content_group": ep.content_group,
+                        "thumbnail": thumb,
+                    }
+                )
             if episodes:
-                seasons.append({
-                    "number": season.number,
-                    "title": season.title,
-                    "episodes": episodes,
-                })
+                seasons.append(
+                    {
+                        "number": season.number,
+                        "title": season.title,
+                        "episodes": episodes,
+                    }
+                )
         if seasons:
-            out_shows.append({
-                "id": show.id,
-                "slug": show.slug,
-                "title": show.title,
-                "synopsis": show.synopsis,
-                "section": show.section,
-                "categories": list(show.categories or []),
-                "featured": show.featured,
-                "artwork": show_art.get(show.id, {}),
-                "seasons": seasons,
-            })
+            out_shows.append(
+                {
+                    "id": show.id,
+                    "slug": show.slug,
+                    "title": show.title,
+                    "synopsis": show.synopsis,
+                    "section": show.section,
+                    "categories": list(show.categories or []),
+                    "featured": show.featured,
+                    "artwork": show_art.get(show.id, {}),
+                    "seasons": seasons,
+                }
+            )
 
     return {"shows": out_shows}
 
@@ -145,13 +151,10 @@ def current_run(db: Session) -> PublishRun | None:
     return db.scalar(select(PublishRun).where(PublishRun.is_current.is_(True)))
 
 
-def publish(db: Session, reference: Reference, storage: Storage,
-            actor_id: int | None) -> dict:
+def publish(db: Session, reference: Reference, storage: Storage, actor_id: int | None) -> dict:
     """Run a publish. Returns a summary dict; raises PublishInProgress if locked."""
     # ---- 1. serialize concurrent publishes ----------------------------------------
-    got_lock = db.execute(
-        text("SELECT pg_try_advisory_lock(:k)"), {"k": PUBLISH_LOCK_ID}
-    ).scalar()
+    got_lock = db.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": PUBLISH_LOCK_ID}).scalar()
     if not got_lock:
         raise PublishInProgress()
 
@@ -166,17 +169,15 @@ def publish(db: Session, reference: Reference, storage: Storage,
         try:
             # ---- 3/4. snapshot and build
             snapshot = build_snapshot(db, storage)
-            generated_at = datetime.now(timezone.utc).isoformat()
-            catalog = build_catalog(
-                snapshot, reference, run_id=run.id, generated_at=generated_at
-            )
+            generated_at = datetime.now(UTC).isoformat()
+            catalog = build_catalog(snapshot, reference, run_id=run.id, generated_at=generated_at)
             checksum = catalog_checksum(catalog)
 
             # ---- 5. idempotency
             live = current_run(db)
             if live is not None and live.checksum == checksum:
                 run.status = PublishStatus.noop
-                run.finished_at = datetime.now(timezone.utc)
+                run.finished_at = datetime.now(UTC)
                 run.counts = catalog["counts"]
                 run.checksum = checksum
                 db.commit()
@@ -194,12 +195,10 @@ def publish(db: Session, reference: Reference, storage: Storage,
 
             # ---- 7. flip the pointer in one transaction
             db.execute(
-                update(PublishRun)
-                .where(PublishRun.is_current.is_(True))
-                .values(is_current=False)
+                update(PublishRun).where(PublishRun.is_current.is_(True)).values(is_current=False)
             )
             run.status = PublishStatus.succeeded
-            run.finished_at = datetime.now(timezone.utc)
+            run.finished_at = datetime.now(UTC)
             run.counts = catalog["counts"]
             run.catalog_key = key
             run.checksum = checksum
@@ -227,7 +226,7 @@ def publish(db: Session, reference: Reference, storage: Storage,
                     .where(PublishRun.id == run.id)
                     .values(
                         status=PublishStatus.failed,
-                        finished_at=datetime.now(timezone.utc),
+                        finished_at=datetime.now(UTC),
                         error=f"{type(exc).__name__}: {exc}"[:2000],
                     )
                 )

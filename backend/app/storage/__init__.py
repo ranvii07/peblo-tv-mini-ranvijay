@@ -29,6 +29,4 @@ def get_storage() -> Storage:
             secret_access_key=s.r2_secret_access_key,
             public_base_url=s.r2_public_base_url,
         )
-    raise ValueError(
-        f"Unknown STORAGE_BACKEND {s.storage_backend!r}. Expected 'local' or 'r2'."
-    )
+    raise ValueError(f"Unknown STORAGE_BACKEND {s.storage_backend!r}. Expected 'local' or 'r2'.")

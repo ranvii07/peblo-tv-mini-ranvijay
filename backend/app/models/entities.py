@@ -179,7 +179,9 @@ class Artwork(Base):
         Enum(OwnerType, name="owner_type"), nullable=False
     )
     owner_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    kind: Mapped[ArtworkKind] = mapped_column(Enum(ArtworkKind, name="artwork_kind"), nullable=False)
+    kind: Mapped[ArtworkKind] = mapped_column(
+        Enum(ArtworkKind, name="artwork_kind"), nullable=False
+    )
     storage_key: Mapped[str] = mapped_column(String(500), nullable=False)
     width: Mapped[int] = mapped_column(Integer, nullable=False)
     height: Mapped[int] = mapped_column(Integer, nullable=False)

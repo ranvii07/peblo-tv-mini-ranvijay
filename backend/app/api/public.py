@@ -64,6 +64,4 @@ def search_catalog(
 ) -> dict:
     catalog, checksum = _load_or_404(db, storage)
     index = index_cache.get(catalog, checksum)
-    return index.search(
-        q=q, category=category, language=language, section=section, limit=limit
-    )
+    return index.search(q=q, category=category, language=language, section=section, limit=limit)

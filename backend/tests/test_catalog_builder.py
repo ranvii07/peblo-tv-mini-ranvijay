@@ -67,12 +67,21 @@ class TestLanguageGrouping:
     def test_variants_collapse_into_one_entry_listing_languages(self):
         snap = {
             "shows": [
-                show(1, "s", "Show", "series", [
-                    season(1, [
-                        ep(10, 1, "The Lost Kite", "en", "cg-s01e01"),
-                        ep(11, 1, "Patang", "hi", "cg-s01e01"),
-                    ])
-                ])
+                show(
+                    1,
+                    "s",
+                    "Show",
+                    "series",
+                    [
+                        season(
+                            1,
+                            [
+                                ep(10, 1, "The Lost Kite", "en", "cg-s01e01"),
+                                ep(11, 1, "Patang", "hi", "cg-s01e01"),
+                            ],
+                        )
+                    ],
+                )
             ]
         }
         entries = build(snap)["sections"][0]["shows"][0]["seasons"][0]["entries"]
@@ -81,37 +90,97 @@ class TestLanguageGrouping:
         assert set(entries[0]["variants"]) == {"en", "hi"}
 
     def test_english_is_canonical_when_present(self):
-        snap = {"shows": [show(1, "s", "Show", "series", [season(1, [
-            ep(11, 1, "Patang", "hi", "cg"),
-            ep(10, 1, "The Lost Kite", "en", "cg"),
-        ])])]}
+        snap = {
+            "shows": [
+                show(
+                    1,
+                    "s",
+                    "Show",
+                    "series",
+                    [
+                        season(
+                            1,
+                            [
+                                ep(11, 1, "Patang", "hi", "cg"),
+                                ep(10, 1, "The Lost Kite", "en", "cg"),
+                            ],
+                        )
+                    ],
+                )
+            ]
+        }
         entry = build(snap)["sections"][0]["shows"][0]["seasons"][0]["entries"][0]
         assert entry["title"] == "The Lost Kite"
         assert entry["entry_id"] == 10
 
     def test_canonical_falls_back_to_first_language_alphabetically(self):
-        snap = {"shows": [show(1, "s", "Show", "series", [season(1, [
-            ep(11, 1, "Hindi title", "hi", "cg"),
-        ])])]}
+        snap = {
+            "shows": [
+                show(
+                    1,
+                    "s",
+                    "Show",
+                    "series",
+                    [
+                        season(
+                            1,
+                            [
+                                ep(11, 1, "Hindi title", "hi", "cg"),
+                            ],
+                        )
+                    ],
+                )
+            ]
+        }
         entry = build(snap)["sections"][0]["shows"][0]["seasons"][0]["entries"][0]
         assert entry["title"] == "Hindi title"
         assert entry["languages"] == ["hi"]
 
     def test_null_content_group_episodes_stay_separate(self):
         """A NULL content_group is not a group — these must not merge into one entry."""
-        snap = {"shows": [show(1, "s", "Show", "series", [season(1, [
-            ep(10, 1, "One", "en", None),
-            ep(11, 2, "Two", "en", None),
-        ])])]}
+        snap = {
+            "shows": [
+                show(
+                    1,
+                    "s",
+                    "Show",
+                    "series",
+                    [
+                        season(
+                            1,
+                            [
+                                ep(10, 1, "One", "en", None),
+                                ep(11, 2, "Two", "en", None),
+                            ],
+                        )
+                    ],
+                )
+            ]
+        }
         entries = build(snap)["sections"][0]["shows"][0]["seasons"][0]["entries"]
         assert len(entries) == 2
         assert [e["languages"] for e in entries] == [["en"], ["en"]]
 
     def test_per_language_duration_preserved_in_variants(self):
-        snap = {"shows": [show(1, "s", "Show", "series", [season(1, [
-            ep(10, 1, "T", "en", "cg", duration=540),
-            ep(11, 1, "T-hi", "hi", "cg", duration=660),
-        ])])]}
+        snap = {
+            "shows": [
+                show(
+                    1,
+                    "s",
+                    "Show",
+                    "series",
+                    [
+                        season(
+                            1,
+                            [
+                                ep(10, 1, "T", "en", "cg", duration=540),
+                                ep(11, 1, "T-hi", "hi", "cg", duration=660),
+                            ],
+                        )
+                    ],
+                )
+            ]
+        }
         entry = build(snap)["sections"][0]["shows"][0]["seasons"][0]["entries"][0]
         assert entry["variants"]["en"]["duration_seconds"] == 540
         assert entry["variants"]["hi"]["duration_seconds"] == 660
@@ -120,19 +189,39 @@ class TestLanguageGrouping:
 
 class TestSeasonZero:
     def test_season_zero_becomes_trailers_not_a_season(self):
-        snap = {"shows": [show(1, "s", "Show", "series", [
-            season(0, [ep(90, 1, "Trailer", "en", "cg-trailer")]),
-            season(1, [ep(10, 1, "Real episode", "en", "cg-s01e01")]),
-        ])]}
+        snap = {
+            "shows": [
+                show(
+                    1,
+                    "s",
+                    "Show",
+                    "series",
+                    [
+                        season(0, [ep(90, 1, "Trailer", "en", "cg-trailer")]),
+                        season(1, [ep(10, 1, "Real episode", "en", "cg-s01e01")]),
+                    ],
+                )
+            ]
+        }
         out_show = build(snap)["sections"][0]["shows"][0]
         assert [s["number"] for s in out_show["seasons"]] == [1]
         assert len(out_show["trailers"]) == 1
         assert out_show["trailers"][0]["title"] == "Trailer"
 
     def test_show_with_only_trailers_still_appears(self):
-        snap = {"shows": [show(1, "s", "Show", "series", [
-            season(0, [ep(90, 1, "Trailer", "en")]),
-        ])]}
+        snap = {
+            "shows": [
+                show(
+                    1,
+                    "s",
+                    "Show",
+                    "series",
+                    [
+                        season(0, [ep(90, 1, "Trailer", "en")]),
+                    ],
+                )
+            ]
+        }
         out_show = build(snap)["sections"][0]["shows"][0]
         assert out_show["seasons"] == []
         assert len(out_show["trailers"]) == 1
@@ -144,39 +233,70 @@ class TestSeasonZero:
 
 class TestOrdering:
     def test_sections_follow_reference_order_not_alphabetical(self):
-        snap = {"shows": [
-            show(1, "a", "A", "songs", [season(1, [ep(1, 1, "x", "en")])]),
-            show(2, "b", "B", "featured", [season(1, [ep(2, 1, "y", "en")])]),
-            show(3, "c", "C", "series", [season(1, [ep(3, 1, "z", "en")])]),
-        ]}
+        snap = {
+            "shows": [
+                show(1, "a", "A", "songs", [season(1, [ep(1, 1, "x", "en")])]),
+                show(2, "b", "B", "featured", [season(1, [ep(2, 1, "y", "en")])]),
+                show(3, "c", "C", "series", [season(1, [ep(3, 1, "z", "en")])]),
+            ]
+        }
         got = [s["section"] for s in build(snap)["sections"]]
         assert got == ["featured", "series", "songs"], "reference.json order, not sorted()"
 
     def test_shows_alphabetical_within_section(self):
-        snap = {"shows": [
-            show(1, "z", "Zebra", "series", [season(1, [ep(1, 1, "x", "en")])]),
-            show(2, "a", "Apple", "series", [season(1, [ep(2, 1, "y", "en")])]),
-        ]}
+        snap = {
+            "shows": [
+                show(1, "z", "Zebra", "series", [season(1, [ep(1, 1, "x", "en")])]),
+                show(2, "a", "Apple", "series", [season(1, [ep(2, 1, "y", "en")])]),
+            ]
+        }
         titles = [s["title"] for s in build(snap)["sections"][0]["shows"]]
         assert titles == ["Apple", "Zebra"]
 
     def test_entries_ordered_by_episode_number(self):
-        snap = {"shows": [show(1, "s", "S", "series", [season(1, [
-            ep(3, 3, "Third", "en"), ep(1, 1, "First", "en"), ep(2, 2, "Second", "en"),
-        ])])]}
+        snap = {
+            "shows": [
+                show(
+                    1,
+                    "s",
+                    "S",
+                    "series",
+                    [
+                        season(
+                            1,
+                            [
+                                ep(3, 3, "Third", "en"),
+                                ep(1, 1, "First", "en"),
+                                ep(2, 2, "Second", "en"),
+                            ],
+                        )
+                    ],
+                )
+            ]
+        }
         entries = build(snap)["sections"][0]["shows"][0]["seasons"][0]["entries"]
         assert [e["episode_number"] for e in entries] == [1, 2, 3]
 
 
 class TestDeterminism:
     def _snapshot(self):
-        return {"shows": [
-            show(2, "b", "Beta", "series", [
-                season(0, [ep(80, 1, "Trailer", "en", "cgt")]),
-                season(1, [ep(20, 1, "B1", "en", "cg20"), ep(21, 1, "B1-hi", "hi", "cg20")]),
-            ]),
-            show(1, "a", "Alpha", "featured", [season(1, [ep(10, 1, "A1", "en")])]),
-        ]}
+        return {
+            "shows": [
+                show(
+                    2,
+                    "b",
+                    "Beta",
+                    "series",
+                    [
+                        season(0, [ep(80, 1, "Trailer", "en", "cgt")]),
+                        season(
+                            1, [ep(20, 1, "B1", "en", "cg20"), ep(21, 1, "B1-hi", "hi", "cg20")]
+                        ),
+                    ],
+                ),
+                show(1, "a", "Alpha", "featured", [season(1, [ep(10, 1, "A1", "en")])]),
+            ]
+        }
 
     def test_same_content_produces_identical_bytes(self):
         a = build(self._snapshot())
@@ -209,10 +329,26 @@ class TestDeterminism:
 class TestCounts:
     def test_counts_report_entries_and_episodes_separately(self):
         """95 episodes collapsing into fewer entries is the whole point of grouping."""
-        snap = {"shows": [show(1, "s", "S", "series", [season(1, [
-            ep(10, 1, "T", "en", "cg1"), ep(11, 1, "T-hi", "hi", "cg1"),
-            ep(12, 2, "U", "en", "cg2"),
-        ])])]}
+        snap = {
+            "shows": [
+                show(
+                    1,
+                    "s",
+                    "S",
+                    "series",
+                    [
+                        season(
+                            1,
+                            [
+                                ep(10, 1, "T", "en", "cg1"),
+                                ep(11, 1, "T-hi", "hi", "cg1"),
+                                ep(12, 2, "U", "en", "cg2"),
+                            ],
+                        )
+                    ],
+                )
+            ]
+        }
         counts = build(snap)["counts"]
         assert counts["episodes"] == 3
         assert counts["entries"] == 2
