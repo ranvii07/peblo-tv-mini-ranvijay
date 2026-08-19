@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: peblo
+          POSTGRES_PASSWORD: peblo
+          POSTGRES_DB: peblo_test
+        options: >-
+          --health-cmd "pg_isready -U peblo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    env:
+      DATABASE_URL: postgresql+psycopg://peblo:peblo@localhost:5432/peblo_test
+      SEED_DIR: ./data/seed
+      STORAGE_ROOT: ./storage_data
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+      - name: Lint
+        working-directory: backend
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Migrations apply cleanly
+        working-directory: backend
+        run: alembic upgrade head
+      - name: Tests
+        working-directory: backend
+        run: pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        app: [cms, viewer]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install
+        working-directory: ${{ matrix.app }}
+        run: npm install
+      - name: Typecheck
+        working-directory: ${{ matrix.app }}
+        run: npm run typecheck
+      - name: Lint
+        working-directory: ${{ matrix.app }}
+        run: npm run lint
+      - name: Build
+        working-directory: ${{ matrix.app }}
+        run: npm run build
+
+  images:
+    # Proves every Dockerfile builds. Cheaper than running the stack and catches the
+    # failure mode that actually matters to a reviewer: a broken build context.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build all images
+        run: docker compose build
+
+  deploy:
+    # Written out and explained, but gated off: there is no cloud account behind this
+    # repo, and a deploy job that pretends otherwise would be dishonest.
+    needs: [backend, frontend, images]
+    if: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push images
+        run: |
+          for svc in api cms viewer; do
+            docker build -t ghcr.io/${{ github.repository }}/$svc:${{ github.sha }} \
+              ./$( [ "$svc" = "api" ] && echo backend || echo $svc )
+            docker push ghcr.io/${{ github.repository }}/$svc:${{ github.sha }}
+          done
+      # The remaining steps depend on the target platform. On Fly.io / ECS / a plain
+      # Docker host the shape is the same:
+      #
+      #   1. Run migrations as a *release step*, before any new container serves
+      #      traffic: `alembic upgrade head` against the production DATABASE_URL.
+      #      Migrations are written to be backward compatible with the currently
+      #      running version, so the old and new code can overlap during the rollout.
+      #   2. Roll the API to the new image, health-checking /api/health (which verifies
+      #      the database and storage, not just that the process is up) before the load
+      #      balancer sends it traffic.
+      #   3. Roll the two static frontends; they are stateless nginx images.
+      #   4. Keep the previous image tagged so a rollback is a tag flip, not a rebuild.
+      #
+      # Secrets (JWT_SECRET, DATABASE_URL, R2 credentials) come from the platform's
+      # secret store and are injected as environment variables at run time. They are
+      # never baked into an image and never committed.
+      - name: Deploy
+        run: echo "Target platform not configured for this take-home."
