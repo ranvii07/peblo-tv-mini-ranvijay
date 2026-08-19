@@ -20,11 +20,19 @@ depends_on = None
 
 
 def upgrade() -> None:
-    user_role = sa.Enum("editor", "admin", name="user_role")
-    content_status = sa.Enum("draft", "published", name="content_status")
-    artwork_kind = sa.Enum("poster", "banner", "thumbnail", name="artwork_kind")
-    owner_type = sa.Enum("show", "episode", name="owner_type")
-    publish_status = sa.Enum("running", "succeeded", "failed", "noop", name="publish_status")
+    # The enum types are created once, explicitly, up front — `content_status` is used
+    # by two tables, and letting create_table emit the CREATE TYPE would try to create
+    # it twice. `create_type=False` on the column definitions below says "this type
+    # already exists, just reference it".
+    user_role = postgresql.ENUM("editor", "admin", name="user_role", create_type=False)
+    content_status = postgresql.ENUM("draft", "published", name="content_status", create_type=False)
+    artwork_kind = postgresql.ENUM(
+        "poster", "banner", "thumbnail", name="artwork_kind", create_type=False
+    )
+    owner_type = postgresql.ENUM("show", "episode", name="owner_type", create_type=False)
+    publish_status = postgresql.ENUM(
+        "running", "succeeded", "failed", "noop", name="publish_status", create_type=False
+    )
 
     bind = op.get_bind()
     for enum in (user_role, content_status, artwork_kind, owner_type, publish_status):

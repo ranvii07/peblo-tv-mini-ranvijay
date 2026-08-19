@@ -286,25 +286,39 @@ def collect_issues(db: Session, reference: Reference) -> dict:
     for show in shows:
         titles = {e.title for s in show.seasons for e in s.episodes if s.number != 0}
         if titles:
-            titles_by_show[show.id] = (show.title, titles)
+            titles_by_show[show.id] = (show.slug, show.title, titles)
 
     seen: set[tuple[int, int]] = set()
-    for a_id, (a_title, a_titles) in titles_by_show.items():
-        for b_id, (b_title, b_titles) in titles_by_show.items():
+    for a_id, (a_slug, a_title, a_titles) in titles_by_show.items():
+        for b_id, (b_slug, b_title, b_titles) in titles_by_show.items():
             if a_id >= b_id or (a_id, b_id) in seen or len(a_titles) < 3:
                 continue
             seen.add((a_id, b_id))
+
+            # Matching episode titles ALONE is far too weak a signal in this catalogue:
+            # the shows share a stock set of episode titles ("The Lost Kite", "Rain on
+            # the Roof"), so a titles-only rule pairs almost every show with every other
+            # and produces fifteen warnings an editor would immediately learn to ignore.
+            # A warning nobody reads is worse than no warning.
+            #
+            # The real signal for the one genuine case is the *slug relationship*:
+            # `peblo-songs` and `peblo-songs-lyrical` look like one show split in two.
+            # Require that, plus a full title overlap.
+            related_slugs = a_slug.startswith(f"{b_slug}-") or b_slug.startswith(f"{a_slug}-")
             overlap = a_titles & b_titles
-            if len(overlap) >= min(len(a_titles), len(b_titles)) and len(overlap) >= 3:
+            covers_both = len(overlap) >= min(len(a_titles), len(b_titles))
+
+            if related_slugs and covers_both and len(overlap) >= 3:
                 global_issues.append(
                     Issue(
                         code="possible_duplicate_shows",
                         severity="warning",
                         message=(
-                            f"'{a_title}' and '{b_title}' have the same {len(overlap)} episode "
-                            "titles. They may be language variants of one show that were "
-                            "imported separately. If so, give the matching episodes a shared "
-                            "content group instead of keeping two shows. Left as-is for now."
+                            f"'{a_title}' and '{b_title}' have matching episode titles and "
+                            "related names, so they may be one show that was imported twice "
+                            "— for example as separate language versions. If they are, give "
+                            "the matching episodes a shared content group rather than keeping "
+                            "two shows. Nothing has been changed."
                         ),
                         entity_type="show",
                         entity_id=a_id,
