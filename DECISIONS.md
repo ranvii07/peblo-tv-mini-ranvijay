@@ -79,3 +79,30 @@ knowledge base with unrelated conventions; a deliverable repo does not belong in
 ### D-007 · Docker was not installed on the build machine
 Neither Docker nor WSL was present. Since `docker compose up` working is an explicit graded
 pass/fail item, this was escalated rather than worked around.
+
+---
+
+## Phase 2/4 — schema, storage, validation
+
+### D-008 · Catalogue checksum excludes `run_id` and `generated_at`
+Idempotency is defined as "republishing unchanged content changes nothing". If the
+checksum covered the generation timestamp and run id — both of which change by
+construction on every run — no republish could ever be detected as a no-op and the
+requirement would be unsatisfiable. The checksum therefore covers content only, while
+the stored document still carries both fields for provenance.
+
+### D-009 · `build_catalog` is a pure function
+Snapshot in, dict out; no DB, no clock, no storage. Language grouping, Season 0 and
+deterministic ordering are the riskiest logic in the system, so they are the part that
+must be testable without infrastructure. All stateful concerns live in the publish
+service. 18 of the tests target this function alone.
+
+### D-010 · A NULL `content_group` is not a group
+Grouping keys on `("cg", content_group)` when set and `("ep", id)` otherwise. Keying all
+NULLs together would collapse every ungrouped episode in a season into a single entry —
+a subtle and very destructive bug. Explicitly tested.
+
+### D-011 · Determinism is enforced by total orderings, not incidental sort stability
+Every list sorts by a tuple that cannot tie: entries by `(episode_number, title,
+entry_id)`, shows by `(title, id)`, sections by reference.json position. Tested by
+building from a reversed snapshot and asserting byte-identical output.
