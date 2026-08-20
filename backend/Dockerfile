@@ -16,7 +16,7 @@ COPY . .
 ENV SEED_DIR=/data/seed \
     STORAGE_ROOT=/storage
 
-RUN chmod +x ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh ./run_tests.sh
 
 EXPOSE 8000
 CMD ["./entrypoint.sh"]

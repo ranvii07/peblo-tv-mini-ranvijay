@@ -575,6 +575,13 @@ function ShowForm({
 }
 
 // ------------------------------------------------------------------ publish page
+// "1 problem" / "2 problems". The publish page is read by editors all day; "1 warnings"
+// reads like a defect in the tool rather than a count, which undermines trust in the
+// rest of the report.
+function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`
+}
+
 function PublishPage({ me }: { me: Me }) {
   const qc = useQueryClient()
   const { toast, setToast } = useToast()
@@ -614,12 +621,12 @@ function PublishPage({ me }: { me: Me }) {
               <div>
                 <strong>
                   {report.data.blocking_publish
-                    ? `${report.data.counts.blockers} problems are blocking publish`
+                    ? `${plural(report.data.counts.blockers, 'problem')} ${report.data.counts.blockers === 1 ? 'is' : 'are'} blocking publish`
                     : 'Everything is ready to publish'}
                 </strong>
                 <p className="muted small">
-                  {report.data.counts.warnings} warnings · {report.data.counts.shows_with_issues}{' '}
-                  shows with issues
+                  {plural(report.data.counts.warnings, 'warning')} ·{' '}
+                  {plural(report.data.counts.shows_with_issues, 'show with issues', 'shows with issues')}
                 </p>
               </div>
               <button
@@ -674,7 +681,7 @@ function PublishPage({ me }: { me: Me }) {
                 <h3>
                   <Link to={`/shows/${s.show_id}`}>{s.title}</Link>{' '}
                   <span className="muted small">
-                    {s.blocker_count} blockers · {s.warning_count} warnings
+                    {plural(s.blocker_count, 'blocker')} · {plural(s.warning_count, 'warning')}
                   </span>
                 </h3>
                 <ul className="issues">

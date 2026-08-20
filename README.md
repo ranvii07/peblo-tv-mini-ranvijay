@@ -66,8 +66,17 @@ To start completely fresh: `docker compose down -v && docker compose up --build`
 ### Running the tests
 
 ```bash
-docker compose exec api pytest -q
+docker compose --profile test run --rm test
 ```
+
+60 tests, all against a **real Postgres** — the schema leans on partial unique indexes,
+array columns and advisory locks, so testing it against SQLite would prove nothing about
+what actually runs.
+
+The suite rebuilds the schema with `DROP SCHEMA public CASCADE`, so it deliberately
+targets a separate `peblo_test` database (created on first use) rather than the one the
+running stack is serving from. That is why it is a profile-gated service and not
+`docker compose exec api pytest`.
 
 Or locally, against a Postgres you already have:
 
@@ -507,6 +516,36 @@ day wondering why their changes aren't live. That's a ticket, not a page.
 - The artwork validator is tested against all six supplied fixtures, asserting the
   specific error code for each rejection.
 
+### The full stack was verified end to end in Docker
+
+Not just unit-tested — the actual `docker compose up` a reviewer will run, from an empty
+volume, with no `.env` file present:
+
+| Check | Result |
+|---|---|
+| `docker compose up --build` from zero (no `.env`, volumes removed) | all four services healthy in **34s** |
+| Migrations on an empty database | `Running upgrade -> 0001, initial schema`, clean |
+| Seed ingest | 8 shows, 10 seasons, **95 episodes** |
+| Planted defect — `ep_0036` missing artwork | quarantined, blocks publish |
+| Planted defect — `ep_9001` duplicate `content_group` | quarantined, blocks publish |
+| Planted defect — `rhyme-rangers` missing section | stays `draft`, section shows `— none —` |
+| Initial autopublish | 7 shows, 65 entries |
+| `GET /api/catalog` | 200, 4 sections; `If-None-Match` → **304** |
+| Artwork upload, all 6 fixtures | 1 accepted (201), 5 rejected (422) with specific codes |
+| Uploaded file served back | 200 `image/jpeg`, via API **and** through the nginx proxy |
+| Role enforcement | editor publish → **403**, anonymous → **401** |
+| Publish gate | correctly refused with the 3 blockers listed |
+| `pytest` inside the container | **60 passed** |
+| Viewer and CMS in a real browser | both render, **zero console errors** |
+
+One quirk worth naming, since it looks inconsistent at first glance: **the startup
+autopublish bypasses the validation gate that the admin endpoint enforces.** Seeding
+calls `publish()` directly, so `docker compose up` always yields a populated viewer;
+pressing *Publish catalogue* in the CMS runs `collect_issues()` first and refuses while
+the three seeded blockers stand. That is deliberate — a reviewer should see a working
+catalogue immediately, but a human-initiated publish should not quietly ship content an
+editor has not resolved. The bootstrap publishes only the valid subset either way.
+
 ---
 
 ## 8. Time spent
@@ -524,3 +563,18 @@ day wondering why their changes aren't live. That's a ticket, not a page.
 | Viewer | 45 min |
 | CI, compose, `.env.example` | 25 min |
 | README + written answers | 30 min |
+| Docker verification + fixes it surfaced | 50 min |
+
+**The note on environment setup.** The machine I built this on had no Docker and no WSL,
+and I could not assume I would get them. Rather than develop against SQLite and hope the
+Postgres-specific parts held, I installed a Postgres 16 instance locally without admin
+rights and ran everything against that from the start. Docker came later, and the
+container run reproduced the local results exactly.
+
+That ordering paid for itself. A real Postgres caught three things SQLite would have
+waved through — a duplicate `CREATE TYPE` in the initial migration, a validation
+heuristic firing fifteen times instead of once, and a `passlib`/`bcrypt` version clash —
+and containerising afterwards caught a fourth: the README's documented test command was
+both broken and destructive, because it pointed a suite that runs `DROP SCHEMA public
+CASCADE` at the live database. That is now a profile-gated `test` service on its own
+database.

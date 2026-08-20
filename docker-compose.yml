@@ -68,6 +68,27 @@ services:
     ports:
       - "${VIEWER_PORT:-3001}:80"
 
+  # Not started by `docker compose up` — it sits behind a profile so it only runs when
+  # asked for: `docker compose --profile test run --rm test`. It points at a separate
+  # database because the suite drops and rebuilds the schema.
+  test:
+    build:
+      context: ./backend
+    profiles: ["test"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-peblo}:${POSTGRES_PASSWORD:-peblo}@db:5432/peblo_test
+      ADMIN_DATABASE_URL: postgresql://${POSTGRES_USER:-peblo}:${POSTGRES_PASSWORD:-peblo}@db:5432/postgres
+      JWT_SECRET: test-secret
+      STORAGE_BACKEND: local
+      STORAGE_ROOT: /storage
+      SEED_DIR: /data/seed
+    volumes:
+      - ./data/seed:/data/seed:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["./run_tests.sh"]
+
 volumes:
   db_data:
   storage_data:
