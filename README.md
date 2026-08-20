@@ -523,7 +523,7 @@ volume, with no `.env` file present:
 
 | Check | Result |
 |---|---|
-| `docker compose up --build` from zero (no `.env`, volumes removed) | all four services healthy in **34s** |
+| `docker compose up --build` from zero (no `.env`, volumes removed) | all four services healthy in **35-50s** (measured across four clean runs) |
 | Migrations on an empty database | `Running upgrade -> 0001, initial schema`, clean |
 | Seed ingest | 8 shows, 10 seasons, **95 episodes** |
 | Planted defect — `ep_0036` missing artwork | quarantined, blocks publish |
