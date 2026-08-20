@@ -24,8 +24,11 @@ jobs:
           - 5432:5432
     env:
       DATABASE_URL: postgresql+psycopg://peblo:peblo@localhost:5432/peblo_test
-      SEED_DIR: ./data/seed
-      STORAGE_ROOT: ./storage_data
+      # Absolute, because these steps run with working-directory: backend, and a
+      # relative seed dir is resolved against the backend package rather than the
+      # checkout root — which would point at backend/data/seed, where nothing lives.
+      SEED_DIR: ${{ github.workspace }}/data/seed
+      STORAGE_ROOT: ${{ github.workspace }}/storage_data
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
