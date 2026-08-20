@@ -681,7 +681,24 @@ editor has not resolved. The bootstrap publishes only the valid subset either wa
 
 ## 9. Time spent
 
-| Phase | Time |
+The brief asks roughly how long each part took, so these are **rough estimates of focused
+effort per area, not wall-clock time** — I did not run a timer. Read them as "where the
+work went", not as a ledger.
+
+Two caveats worth stating plainly, because the column does not add up to a tidy 6–8
+hours:
+
+- **The phases overlap.** Verification was not a block at the end; it ran alongside
+  implementation, and time spent debugging in Docker is attributed to the area whose bug
+  it exposed rather than counted twice. The same goes for environment work, which was
+  interleaved with the first few phases rather than completed before them.
+- **Two of the rows are not implementation.** Docker verification and the final pass
+  against the brief are review, and they found real defects — the publish-gate deadlock
+  in particular (§4.5). I would rather report that honestly than compress the estimate to
+  fit the nominal window. The build itself sits inside it; the checking is what pushes
+  the total past it.
+
+| Phase | Approx. effort |
 |---|---|
 | Acquire + audit seed data (incl. recovering the assets from the PDF's link annotations) | 15 min |
 | Environment setup | see note below |
@@ -695,7 +712,7 @@ editor has not resolved. The bootstrap publishes only the valid subset either wa
 | CI, compose, `.env.example` | 25 min |
 | README + written answers | 30 min |
 | Docker verification + fixes it surfaced | 50 min |
-| Final pass: re-read the brief line by line against the built system, fixed the gaps it found (D-012 to D-015) | 60 min |
+| Final pass: re-read the brief line by line against the built system, fixed the gaps it found (D-012 to D-018) | 60 min |
 
 **The note on environment setup.** The machine I built this on had no Docker and no WSL,
 and I could not assume I would get them. Rather than develop against SQLite and hope the
