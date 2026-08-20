@@ -25,7 +25,7 @@ class LocalDiskStorage:
         # Keys are server-generated, but treat them as untrusted anyway: a key
         # containing '..' must not be able to escape STORAGE_ROOT.
         target = (self.root / key).resolve()
-        if not str(target).startswith(str(self.root)):
+        if not target.is_relative_to(self.root):
             raise ValueError(f"key escapes storage root: {key!r}")
         return target
 

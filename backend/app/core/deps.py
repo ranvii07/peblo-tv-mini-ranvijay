@@ -1,9 +1,11 @@
 """Auth dependencies.
 
-Roles are enforced here and nowhere else, so there is exactly one place to audit. Every
-route under `/api/admin/*` takes `require_admin`; every other mutating route takes
-`require_user`. Catalogue, search, media and health take neither and are public — that
-is what lets the viewer app work without any auth code at all.
+Roles are enforced here and nowhere else, so there is exactly one place to audit.
+`require_admin` guards the one thing an editor may not do — publishing. Everything else
+under `/api` takes `require_user`, including the validation report and run history: both
+exist to tell editors what to fix and what happened, so hiding them from editors would
+defeat their purpose. Catalogue, search, media and health take neither and are public —
+that is what lets the viewer app work without any auth code at all.
 """
 
 from __future__ import annotations

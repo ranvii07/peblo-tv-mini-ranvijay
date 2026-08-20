@@ -94,6 +94,27 @@ class TestValidationReport:
         assert db.scalar(select(Show).where(Show.slug == "peblo-songs")) is not None
         assert db.scalar(select(Show).where(Show.slug == "peblo-songs-lyrical")) is not None
 
+    def test_draft_show_is_surfaced_as_warnings_and_never_blocks(self, seeded):
+        """`rhyme-rangers` ships with `section: null` — the report must still show it.
+
+        It is a draft, so it cannot block a publish it is not part of; reporting its
+        gaps as errors would train editors to ignore the report. Reporting nothing at
+        all would hide a planted defect. Warnings are the honest middle.
+        """
+        report = collect_issues(seeded["db"], seeded["reference"])
+        group = next(s for s in report["shows"] if s["title"] == "Rhyme Rangers")
+        assert group["status"] == "draft"
+        assert group["blocker_count"] == 0
+        codes = {i["code"] for i in group["issues"]}
+        assert "missing_section" in codes
+        assert all(i["severity"] == "warning" for i in group["issues"])
+
+    def test_published_shows_still_produce_real_blockers(self, seeded):
+        """The downgrade applies to drafts only — published shows keep their teeth."""
+        report = collect_issues(seeded["db"], seeded["reference"])
+        assert report["blocking_publish"] is True
+        assert report["counts"]["blockers"] > 0
+
 
 # ------------------------------------------------------------------- publishing
 class TestPublish:
@@ -216,6 +237,165 @@ class TestPublish:
             assert all(season["number"] != 0 for season in s["seasons"])
 
 
+# ----------------------------------------------------------- CRUD validation gate
+class TestPublishGateOnCrud:
+    """`PATCH status -> published` runs the same rules the publish job does.
+
+    Without this, a row could be marked published through the API and only discovered
+    to be unpublishable at publish time — which is exactly the disagreement the shared
+    validation service exists to prevent.
+    """
+
+    def _auth(self, client):
+        res = client.post(
+            "/api/auth/login", json={"email": "editor@peblo.test", "password": "editor123"}
+        )
+        return {"Authorization": f"Bearer {res.json()['access_token']}"}
+
+    def test_episode_without_artwork_cannot_be_published(self, seeded, client):
+        db = seeded["db"]
+        # ep_0036 is the seed row that claims `published` but ships no artwork.
+        episode = db.scalar(select(Episode).where(Episode.external_id == "ep_0036"))
+        res = client.patch(
+            f"/api/episodes/{episode.id}",
+            json={"status": "published"},
+            headers=self._auth(client),
+        )
+        assert res.status_code == 422
+        body = res.json()["error"]
+        assert body["code"] == "not_publishable"
+        codes = {i["code"] for i in body["details"]["issues"]}
+        assert "missing_thumbnail" in codes
+        # The refusal must not have half-applied the change.
+        db.expire_all()
+        assert db.get(Episode, episode.id).status is Status.draft
+
+    def test_fixing_the_problem_then_publishing_actually_works(self, seeded, client):
+        """The whole point of the report: fix what it names, then publish.
+
+        `seed_issue` is an advisory "a human must look at this" marker. It is cleared on
+        the way *into* the publish gate, because asking to publish is that human having
+        looked — otherwise the flag would block its own removal and a flagged row could
+        never be published no matter what was fixed.
+        """
+        db, storage, reference = seeded["db"], seeded["storage"], seeded["reference"]
+        episode = db.scalar(select(Episode).where(Episode.external_id == "ep_0036"))
+        assert episode.seed_issue, "precondition: this row arrived flagged"
+        headers = self._auth(client)
+
+        # Still refused while the real problem stands.
+        assert (
+            client.patch(
+                f"/api/episodes/{episode.id}", json={"status": "published"}, headers=headers
+            ).status_code
+            == 422
+        )
+
+        # The editor does what the message asked: uploads the missing thumbnail.
+        data = (seeded["seed_dir"] / "assets" / "thumb_good.jpg").read_bytes()
+        up = client.post(
+            "/api/artwork",
+            files={"file": ("thumb_good.jpg", data, "image/jpeg")},
+            data={"owner_type": "episode", "owner_id": str(episode.id), "kind": "thumbnail"},
+            headers=headers,
+        )
+        assert up.status_code == 201, up.text
+
+        # ...and now it publishes.
+        res = client.patch(
+            f"/api/episodes/{episode.id}", json={"status": "published"}, headers=headers
+        )
+        assert res.status_code == 200, res.text
+        assert res.json()["status"] == "published"
+        assert res.json()["seed_issue"] is None
+
+        # And it reaches the catalogue.
+        publish_service.publish(db, reference, storage, actor_id=None)
+        catalog, _ = publish_service.load_current_catalog(db, storage)
+        titles = {
+            e["title"]
+            for section in catalog["sections"]
+            for show in section["shows"]
+            for season in show["seasons"]
+            for e in season["entries"]
+        }
+        assert "The Midnight Market" in titles
+
+    def test_show_without_a_section_cannot_be_published(self, seeded, client):
+        db = seeded["db"]
+        show = db.scalar(select(Show).where(Show.slug == "rhyme-rangers"))
+        res = client.patch(
+            f"/api/shows/{show.id}", json={"status": "published"}, headers=self._auth(client)
+        )
+        assert res.status_code == 422
+        codes = {i["code"] for i in res.json()["error"]["details"]["issues"]}
+        assert "missing_section" in codes
+
+    def test_duplicate_content_group_language_is_a_clean_409(self, seeded, client):
+        """The DB constraint must surface as an editor-readable conflict, not a 500."""
+        db = seeded["db"]
+        # ep_9001 had its content_group detached at ingest. Putting it back collides
+        # with ep_0004, which still owns (motis-many-lives-s01e02, hi).
+        episode = db.scalar(select(Episode).where(Episode.external_id == "ep_9001"))
+        res = client.patch(
+            f"/api/episodes/{episode.id}",
+            json={"content_group": "motis-many-lives-s01e02"},
+            headers=self._auth(client),
+        )
+        assert res.status_code == 409
+        body = res.json()["error"]
+        assert body["code"] == "duplicate_content_group"
+        assert "hi" in body["message"]
+
+
+# --------------------------------------------------------------- artwork upload
+class TestArtworkUploadEndpoint:
+    """The validator is unit-tested; this proves the wiring, status codes and envelope."""
+
+    def _auth(self, client):
+        res = client.post(
+            "/api/auth/login", json={"email": "editor@peblo.test", "password": "editor123"}
+        )
+        return {"Authorization": f"Bearer {res.json()['access_token']}"}
+
+    def _upload(self, client, seeded, filename, kind, owner_id):
+        data = (seeded["seed_dir"] / "assets" / filename).read_bytes()
+        return client.post(
+            "/api/artwork",
+            files={"file": (filename, data, "image/jpeg")},
+            data={"owner_type": "show", "owner_id": str(owner_id), "kind": kind},
+            headers=self._auth(client),
+        )
+
+    def test_wrong_shape_is_rejected_with_an_actionable_message(self, seeded, client):
+        show = seeded["db"].scalar(select(Show).where(Show.slug == "rhyme-rangers"))
+        res = self._upload(client, seeded, "poster_wrong_ratio.jpg", "poster", show.id)
+        assert res.status_code == 422
+        body = res.json()["error"]
+        assert body["code"] == "wrong_aspect_ratio"
+        assert body["details"]["expected"]["width"] == 600
+        assert body["details"]["received"]["width"] == 900
+        # Written for an editor: names the shape and says what to do.
+        assert "crop" in body["message"].lower()
+
+    def test_good_poster_is_accepted_and_served_back(self, seeded, client):
+        show = seeded["db"].scalar(select(Show).where(Show.slug == "rhyme-rangers"))
+        res = self._upload(client, seeded, "poster_good.jpg", "poster", show.id)
+        assert res.status_code == 201, res.text
+        record = res.json()
+        assert (record["width"], record["height"]) == (600, 900)
+        assert client.get(record["url"]).status_code == 200
+
+    def test_upload_requires_sign_in(self, seeded, client):
+        data = (seeded["seed_dir"] / "assets" / "poster_good.jpg").read_bytes()
+        res = client.post(
+            "/api/artwork",
+            files={"file": ("poster_good.jpg", data, "image/jpeg")},
+            data={"owner_type": "show", "owner_id": "1", "kind": "poster"},
+        )
+        assert res.status_code == 401
+
+
 # ------------------------------------------------------------------------- auth
 class TestRolesAreEnforced:
     def _token(self, client, email, password):
@@ -260,6 +440,20 @@ class TestRolesAreEnforced:
         if res.status_code == 422:
             # Blocked by content, not by permissions — that is a different failure.
             assert res.json()["error"]["code"] == "publish_blocked"
+
+
+# --------------------------------------------------------------------- reference
+class TestReferenceEndpoint:
+    def test_reference_is_served_to_the_cms_not_duplicated_in_it(self, seeded, client):
+        """The CMS reads sections/languages/specs from here; nothing restates them."""
+        res = client.post(
+            "/api/auth/login", json={"email": "editor@peblo.test", "password": "editor123"}
+        )
+        headers = {"Authorization": f"Bearer {res.json()['access_token']}"}
+        body = client.get("/api/reference", headers=headers).json()
+        assert body["sections"] == seeded["reference"].sections
+        assert body["languages"] == seeded["reference"].languages
+        assert body["artwork_specs"]["poster"]["target_px"] == [600, 900]
 
 
 # ----------------------------------------------------------------------- catalog

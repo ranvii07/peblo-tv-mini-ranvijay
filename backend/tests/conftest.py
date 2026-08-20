@@ -6,6 +6,12 @@ locks. Testing them against SQLite would prove nothing about what actually runs.
 
 If DATABASE_URL is not reachable, the integration tests skip rather than fail, so the
 pure-function suites (catalogue builder, artwork validator) still run anywhere.
+
+**These tests are destructive.** `app_env` runs `DROP SCHEMA public CASCADE` to rebuild
+the schema for each test, so pointing them at a database holding anything you care about
+— in particular the `peblo` database the running stack serves from — destroys it. The
+guard in `db_available` refuses to run unless the target database name ends in `_test`.
+"Remember to set the right DATABASE_URL" is not a safety mechanism; a check is.
 """
 
 from __future__ import annotations
@@ -33,11 +39,18 @@ def reference():
 @pytest.fixture(scope="session")
 def db_available() -> bool:
     from sqlalchemy import create_engine, text
+    from sqlalchemy.engine import make_url
 
     from app.core.config import get_settings
 
+    url = make_url(get_settings().database_url)
+    if not (url.database or "").endswith("_test"):
+        # Not an error — the DB-free suites still run. The integration tests simply
+        # refuse to touch a database that is not obviously a throwaway.
+        return False
+
     try:
-        engine = create_engine(get_settings().database_url)
+        engine = create_engine(url)
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         return True
@@ -49,7 +62,12 @@ def db_available() -> bool:
 def app_env(tmp_path, db_available, monkeypatch):
     """A migrated, empty database plus an isolated storage root."""
     if not db_available:
-        pytest.skip("no database reachable — integration test skipped")
+        pytest.skip(
+            "No usable test database. DATABASE_URL must be reachable AND name a database "
+            "ending in '_test' — this suite runs DROP SCHEMA public CASCADE, so it will "
+            "not point at the live 'peblo' database. Easiest route: "
+            "docker compose --profile test run --rm --build test"
+        )
 
     from sqlalchemy import text
 

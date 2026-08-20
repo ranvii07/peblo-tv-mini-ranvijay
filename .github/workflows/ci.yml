@@ -62,7 +62,9 @@ jobs:
           node-version: '20'
       - name: Install
         working-directory: ${{ matrix.app }}
-        run: npm install
+        # `ci`, not `install`: the committed lockfile is the input, and a run that
+        # silently resolved something newer would not be testing what ships.
+        run: npm ci
       - name: Typecheck
         working-directory: ${{ matrix.app }}
         run: npm run typecheck

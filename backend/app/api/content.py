@@ -60,6 +60,11 @@ class SeasonIn(BaseModel):
     title: str | None = None
 
 
+class SeasonPatch(BaseModel):
+    number: int | None = Field(default=None, ge=0)
+    title: str | None = None
+
+
 class EpisodeIn(BaseModel):
     number: int = Field(ge=0)
     title: str = Field(min_length=1, max_length=500)
@@ -157,6 +162,27 @@ def _slugify(title: str) -> str:
     import re
 
     return re.sub(r"[^a-z0-9]+", "-", title.casefold()).strip("-") or "show"
+
+
+# ------------------------------------------------------------------------- reference
+@router.get("/reference")
+def get_reference_config(
+    reference: Reference = Depends(get_reference),
+    _: User = Depends(require_user),
+) -> dict:
+    """Serve `reference.json` to the CMS.
+
+    Loading it at runtime is pointless if the frontend then hardcodes the same values,
+    so the CMS reads its section list, language list and artwork specs from here. Adding
+    a language or retargeting a poster size stays a data change rather than a frontend
+    deploy.
+    """
+    return {
+        "sections": reference.sections,
+        "categories": reference.categories,
+        "languages": reference.languages,
+        "artwork_specs": reference.artwork_specs,
+    }
 
 
 # ----------------------------------------------------------------------------- shows
@@ -391,6 +417,37 @@ def create_season(
     }
 
 
+@router.patch("/seasons/{season_id}")
+def update_season(
+    season_id: int,
+    payload: SeasonPatch,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_user),
+) -> dict:
+    season = db.get(Season, season_id)
+    if season is None:
+        raise not_found("season", season_id)
+
+    for k, v in payload.model_dump(exclude_unset=True).items():
+        setattr(season, k, v)
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise conflict(
+            "duplicate_season",
+            f"This show already has a season {payload.number}.",
+        ) from None
+    db.refresh(season)
+    return {
+        "id": season.id,
+        "show_id": season.show_id,
+        "number": season.number,
+        "title": season.title,
+    }
+
+
 @router.delete("/seasons/{season_id}", status_code=204)
 def delete_season(
     season_id: int,
@@ -473,6 +530,13 @@ def update_episode(
         setattr(episode, k, v)
 
     if new_status == "published":
+        # Deliberately cleared *before* the gate runs. `seed_issue` means "a human has
+        # to look at this row", and asking to publish it is that human having looked —
+        # so the flag has to clear on the way in, or it would block its own removal and
+        # a flagged row could never be published no matter what was fixed. The problems
+        # it pointed at are separate rules (missing thumbnail, missing duration) and are
+        # still enforced below; only the "needs a decision" marker is resolved here.
+        episode.seed_issue = None
         db.flush()
         season = db.get(Season, episode.season_id)
         show = db.get(Show, season.show_id)
@@ -490,8 +554,6 @@ def update_episode(
                 {"issues": [i.to_dict() for i in blockers]},
             )
         episode.status = Status.published
-        # Clearing the import flag records that a human has resolved it.
-        episode.seed_issue = None
     elif new_status == "draft":
         episode.status = Status.draft
 

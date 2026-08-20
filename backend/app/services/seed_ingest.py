@@ -8,9 +8,10 @@ shows it to an editor. Nothing is dropped, nothing is quietly corrected.
 
 The one exception is the `(content_group, language)` unique index, which is a real
 database constraint and cannot hold two colliding rows. The colliding row is still
-ingested — it keeps its content_group, is forced to `draft`, and carries a `seed_issue`
-explaining the collision — because deleting it would destroy the very evidence the
-report exists to surface.
+ingested — it is forced to `draft`, its `content_group` is detached so the index holds,
+and a `seed_issue` records the collision and names the row it collided with. Deleting it
+would destroy the very evidence the report exists to surface; keeping the grouping would
+mean refusing to load the seed at all.
 
 Shape note: `seed_shows.json` is a flat list of 95 episode rows, not a nested tree.
 Shows and seasons are derived from the rows (`slug` is show identity).
@@ -183,7 +184,12 @@ def seed_content(
             external_id=r["episode_id"],
             number=r["episode_number"],
             title=r["episode_title"],
-            synopsis=r.get("synopsis"),
+            # The seed's `synopsis` is a *show* field — it is identical on all 95 rows of
+            # a show, and rows disagreeing about it is recorded above as a finding. So
+            # episodes arrive without one rather than inheriting a copy of the show's:
+            # writing the show's blurb under all ten episodes would be inventing data,
+            # and the viewer would print the same paragraph ten times.
+            synopsis=None,
             duration_seconds=duration,
             language=language,
             content_group=content_group,

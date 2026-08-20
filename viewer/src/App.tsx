@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Link,
@@ -20,6 +20,16 @@ import {
 
 function useCatalog() {
   return useQuery({ queryKey: ['catalog'], queryFn: fetchCatalog, retry: 1 })
+}
+
+/** One search request per pause in typing, rather than one per keystroke. */
+function useDebounced<T>(value: T, ms = 300): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), ms)
+    return () => clearTimeout(timer)
+  }, [value, ms])
+  return debounced
 }
 
 function allShows(catalog: Catalog): Show[] {
@@ -173,9 +183,21 @@ function ShowDetail() {
 
 function Search() {
   const [params, setParams] = useSearchParams()
-  const q = params.get('q') ?? ''
   const category = params.get('category') ?? ''
   const language = params.get('language') ?? ''
+
+  // Typed locally, written to the URL after a pause. The URL stays shareable without
+  // the back button collecting one entry per letter.
+  const [typed, setTyped] = useState(params.get('q') ?? '')
+  const q = useDebounced(typed)
+
+  useEffect(() => {
+    if (q === (params.get('q') ?? '')) return
+    const next = new URLSearchParams(params)
+    if (q) next.set('q', q)
+    else next.delete('q')
+    setParams(next, { replace: true })
+  }, [q, params, setParams])
 
   const query = useQuery({
     queryKey: ['search', q, category, language],
@@ -198,9 +220,9 @@ function Search() {
       <h1>Search</h1>
       <div className="filters">
         <input
-          value={q}
+          value={typed}
           placeholder="Search shows and episodes"
-          onChange={(e) => update('q', e.target.value)}
+          onChange={(e) => setTyped(e.target.value)}
         />
         <select value={category} onChange={(e) => update('category', e.target.value)}>
           <option value="">All categories</option>

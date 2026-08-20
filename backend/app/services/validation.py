@@ -225,9 +225,14 @@ def show_blockers(
 def collect_issues(db: Session, reference: Reference) -> dict:
     """Full publish-readiness report, grouped by show.
 
-    Only shows *intended* to be published are gated. A show deliberately left as a draft
-    is not a problem to fix — it simply will not appear in the catalogue — so reporting
-    it as an error would train editors to ignore the report.
+    Only *published* shows can block a publish. A show deliberately left as a draft is
+    not a problem to fix — it simply will not appear in the catalogue — so reporting its
+    gaps as errors would train editors to ignore the report.
+
+    Draft shows are still listed, with every issue downgraded to `warning`. That is what
+    keeps the seed's section-less show visible: an editor can see exactly what it would
+    take to bring it live without being told that something deliberately unpublished is
+    an error.
     """
     artwork = _artwork_index(db)
 
@@ -242,8 +247,7 @@ def collect_issues(db: Session, reference: Reference) -> dict:
     blocking = False
 
     for show in shows:
-        if show.status is not Status.published:
-            continue
+        is_draft = show.status is not Status.published
 
         issues: list[Issue] = []
         publishable = 0
@@ -263,6 +267,10 @@ def collect_issues(db: Session, reference: Reference) -> dict:
 
         issues = show_blockers(show, reference, artwork, publishable) + issues
 
+        if is_draft:
+            for issue in issues:
+                issue.severity = "warning"
+
         if issues:
             if any(i.severity == "blocker" for i in issues):
                 blocking = True
@@ -271,6 +279,7 @@ def collect_issues(db: Session, reference: Reference) -> dict:
                     "show_id": show.id,
                     "title": show.title,
                     "section": show.section,
+                    "status": show.status.value,
                     "blocker_count": sum(1 for i in issues if i.severity == "blocker"),
                     "warning_count": sum(1 for i in issues if i.severity == "warning"),
                     "issues": [i.to_dict() for i in issues],
@@ -282,7 +291,7 @@ def collect_issues(db: Session, reference: Reference) -> dict:
     # *probably* language variants that were filed as separate shows. The data does not
     # say so, and merging shows is destructive, so this is raised for a human rather
     # than acted on. (This is what flags peblo-songs vs peblo-songs-lyrical.)
-    titles_by_show: dict[int, tuple[str, set[str]]] = {}
+    titles_by_show: dict[int, tuple[str, str, set[str]]] = {}
     for show in shows:
         titles = {e.title for s in show.seasons for e in s.episodes if s.number != 0}
         if titles:

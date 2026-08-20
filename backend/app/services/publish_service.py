@@ -41,7 +41,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-from sqlalchemy import select, text, update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import Reference
@@ -154,8 +154,22 @@ def current_run(db: Session) -> PublishRun | None:
 def publish(db: Session, reference: Reference, storage: Storage, actor_id: int | None) -> dict:
     """Run a publish. Returns a summary dict; raises PublishInProgress if locked."""
     # ---- 1. serialize concurrent publishes ----------------------------------------
-    got_lock = db.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": PUBLISH_LOCK_ID}).scalar()
+    # The lock is held on a connection of its own for the whole job. A session-level
+    # advisory lock belongs to the connection that took it, and this Session hands its
+    # connection back to the pool on every commit — of which there are three below.
+    # Taking the lock through the Session could therefore release it against a
+    # *different* connection at the end and leave the real lock held indefinitely, which
+    # would turn every later publish into a permanent 409.
+    lock_conn = db.get_bind().connect()
+    try:
+        got_lock = lock_conn.exec_driver_sql(
+            "SELECT pg_try_advisory_lock(%s)", (PUBLISH_LOCK_ID,)
+        ).scalar()
+    except BaseException:
+        lock_conn.close()
+        raise
     if not got_lock:
+        lock_conn.close()
         raise PublishInProgress()
 
     run: PublishRun | None = None
@@ -233,8 +247,10 @@ def publish(db: Session, reference: Reference, storage: Storage, actor_id: int |
                 db.commit()
             raise
     finally:
-        db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": PUBLISH_LOCK_ID})
-        db.commit()
+        try:
+            lock_conn.exec_driver_sql("SELECT pg_advisory_unlock(%s)", (PUBLISH_LOCK_ID,))
+        finally:
+            lock_conn.close()
 
 
 def load_current_catalog(db: Session, storage: Storage) -> tuple[dict, str] | None:

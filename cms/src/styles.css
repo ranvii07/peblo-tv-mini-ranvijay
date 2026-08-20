@@ -143,3 +143,13 @@ input[type=checkbox] { width: auto; }
 }
 .toast.ok { background: var(--ok); }
 .toast.err { background: var(--err); }
+
+.checks-field { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: grid; gap: 8px; }
+.checks-field legend { font-weight: 600; font-size: 13px; padding: 0 4px; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.checks label { font-size: 13px; }
+
+.add-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+.add-form { border-top: 0; padding: 12px; border: 1px dashed var(--line); border-radius: 8px; background: #fbfcfe; }
+.btn.danger { border-color: #e8b4b8; color: var(--err); }
+.btn.danger:hover:not(:disabled) { background: #fdf1f2; }

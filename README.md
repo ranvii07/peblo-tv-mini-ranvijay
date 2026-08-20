@@ -66,10 +66,13 @@ To start completely fresh: `docker compose down -v && docker compose up --build`
 ### Running the tests
 
 ```bash
-docker compose --profile test run --rm test
+docker compose --profile test run --rm --build test
 ```
 
-60 tests, all against a **real Postgres** — the schema leans on partial unique indexes,
+`--build` matters: `run` reuses an existing image, so without it a code change would be
+tested against the previous build.
+
+70 tests, all against a **real Postgres** — the schema leans on partial unique indexes,
 array columns and advisory locks, so testing it against SQLite would prove nothing about
 what actually runs.
 
@@ -78,16 +81,20 @@ targets a separate `peblo_test` database (created on first use) rather than the 
 running stack is serving from. That is why it is a profile-gated service and not
 `docker compose exec api pytest`.
 
-Or locally, against a Postgres you already have:
+Or locally, against a Postgres you already have — note the **`peblo_test`** database:
 
 ```bash
 cd backend
 pip install -r requirements-dev.txt
-DATABASE_URL=postgresql+psycopg://peblo:peblo@localhost:5432/peblo pytest -q
+DATABASE_URL=postgresql+psycopg://peblo:peblo@localhost:5432/peblo_test pytest -q
 ```
 
-The pure-function tests (catalogue builder, artwork validator) need no database and run
-anywhere; the integration tests skip cleanly if no database is reachable.
+The integration tests run `DROP SCHEMA public CASCADE`, so `conftest.py` refuses any
+database whose name does not end in `_test` — including the `peblo` database the running
+stack serves from. It skips with an explanation rather than erroring, so the
+pure-function tests (catalogue builder, artwork validator) still run with no database at
+all. That guard exists because the earlier version of this paragraph named the live
+database, and following my own instructions wiped a running stack.
 
 ---
 
@@ -101,13 +108,19 @@ validation report shows an editor what to fix and how.
 | # | Finding | How it's handled |
 |---|---|---|
 | 1 | **`ep_9001` duplicates `(content_group, language)`** — it claims `motis-many-lives-s01e02` / `hi`, which `ep_0004` already owns. Its title is `"The Lost Kite (v2)"` while the rest of that group is `"Rain on the Roof"`, and it also collides on `(season, episode_number)`. A bad re-upload. | Row is **kept** (deleting it would destroy the evidence), forced to `draft`, its `content_group` detached so the partial unique index holds, and `seed_issue` records the collision. Appears in the report as a blocker naming both episodes. |
-| 2 | **`rhyme-rangers` has `section: null`** on all 8 rows. | Show loads with a NULL section and stays `draft`. A published show requires a section, so the report tells the editor to choose one of the four. |
+| 2 | **`rhyme-rangers` has `section: null`** on all 8 rows. | Show loads with a NULL section and stays `draft`. It is listed in the validation report — tagged `draft`, with "choose one of: featured, series, minisodes, songs" as a **warning**, since a draft cannot block a publish it isn't part of. The CMS shows `— none —` in red on the list and inline on the editor. |
 | 3 | **`ep_0036` is `published` with `artwork_available: []`** — no thumbnail. | Quarantined as `draft`. Publishing it is refused until artwork exists. |
 | 4 | **Season 0 trailers** (`ep_0093`, `ep_0094`) have thumbnail-only artwork. | Correct, not a defect — but it means the poster/banner requirement is a **show**-level rule that must not be applied to Season 0 entries. The rules are written accordingly. |
 | 5 | **`peblo-songs-lyrical` mirrors every `peblo-songs` episode title** in `en` only, under *distinct* content_groups. Looks like language variants filed as a separate show. | **Not merged.** The data doesn't actually say they're the same show, and silently merging two shows is exactly the "helpfully cleaned your data" failure. Raised as a `warning` for a human to decide, with the overlapping titles listed. |
 | 6 | Clean: no invalid languages, categories or sections beyond the above; all durations present and positive (75–660s); no orphan seasons. | — |
 
-A subtlety worth stating: the seed's `artwork_available` field declares *which* artwork
+Two subtleties worth stating. First, the seed's `synopsis` is a **show** field — it
+repeats identically on all rows of a show — so episodes are ingested without one rather
+than each inheriting a copy. Manufacturing an episode synopsis by duplicating the show's
+blurb is inventing data, and the viewer would print the same paragraph under all ten
+episodes.
+
+Second, the seed's `artwork_available` field declares *which* artwork
 should exist but ships no per-show image files. The seeder attaches the three known-good
 sample images to satisfy each declared slot, so the viewer has real pictures. A row
 declaring fewer slots genuinely lacks that artwork and is treated as a blocker.
@@ -161,6 +174,12 @@ is a no-op" impossible to satisfy.
 ungrouped episode in a season into one entry — a quiet, destructive bug. Explicitly
 tested.
 
+**`reference.json` is served, never restated.** Sections, categories, languages and the
+three artwork specs are loaded from that file at runtime and handed to the CMS by
+`GET /api/reference`. The artwork slot's "600×900 (2:3), max 200 KB" label and the
+server-side rule that enforces it read the same source, so the label and the rule cannot
+drift apart. Adding a language is a one-file data change, not two deploys.
+
 **Two separate frontend apps, not one app with routes.** The rubric penalises the viewer
 touching admin endpoints, so the separation is structural rather than a matter of
 discipline: the viewer bundle contains no auth code and its entire network surface is
@@ -184,6 +203,49 @@ and stated as such. A real system would not create accounts from environment var
 ---
 
 ## 4. Written answers
+
+The brief asks for at most a page. **These five short answers are that page** — each
+links to the longer version below for anyone who wants the reasoning behind it.
+
+1. **[Atomic publish](#41-how-did-you-make-publishing-atomic-and-what-happens-if-the-process-dies-mid-publish).**
+   Nothing is ever overwritten. Each run writes a new immutable key,
+   `catalogs/{run_id}.json`, and a single committed transaction moves the `is_current`
+   pointer — a partial unique index makes "at most one live catalogue" a database
+   guarantee. Readers resolve the pointer, then read that key, so they only ever see a
+   file some run finished writing. A crash before the write leaves the pointer alone;
+   between write and flip leaves an orphan file nothing references; during the write is
+   impossible to observe (temp-file + `os.replace` locally, atomic PUT on S3/R2). A
+   failed publish always leaves the previous catalogue serving — there is a test that
+   forces `storage.put` to raise and asserts exactly that.
+2. **[Local disk → R2](#42-your-storage-abstraction-what-changes-to-move-from-local-disk-to-cloudflare-r2).**
+   One class and an environment variable, no call-site changes. Everything that persists
+   bytes goes through the `Storage` protocol; `get_storage()` picks the implementation
+   from `STORAGE_BACKEND`. `R2Storage` is an honest stub whose docstring spells out the
+   boto3 calls. The swap is safe because the two semantics the publish job depends on —
+   per-object atomic PUT and read-after-write consistency — both hold on R2.
+3. **[Search](#43-search-how-is-it-implemented-at-what-size-does-it-stop-working-and-what-next).**
+   Server-side, in memory, over the *published catalogue* — not the browser, not the
+   database. A flat normalised index cached by catalogue checksum; `q`, `category`,
+   `language` and `section` compose with AND. It is a linear scan: fine to roughly
+   10⁴–10⁵ entries, and match quality (no typo tolerance, no stemming, no ranking) bites
+   before size does. Next: a `published_entries` projection with Postgres `tsvector` +
+   GIN written at publish time, then a dedicated engine fed by the same publish job.
+4. **[Why a published file](#44-why-serve-a-pre-published-catalogue-file-instead-of-querying-the-database-per-request-where-does-that-bite).**
+   It decouples the viewer's read path from admin write load and schema churn, is
+   trivially cacheable (the checksum is a perfect ETag), survives a database outage, and
+   makes "unpublished content cannot leak" structural rather than a `WHERE` clause you
+   have to remember. It bites on staleness, on publishing becoming a human bottleneck,
+   on personalisation being impossible from a shared file, on monotonic payload growth,
+   and on publish being all-or-nothing.
+5. **[Left out, and AI use](#45-what-did-you-leave-out-and-which-ai-tools-did-you-use).**
+   Left out: all three stretch goals, E2E tests, video playback, refresh tokens, the
+   orphan-file cleanup job, frontend unit tests, a real deploy. Used Claude throughout,
+   and the three corrections that mattered were the artwork tolerance rule (its "up to
+   2× spec" band would have accepted `banner_too_big.png`, which is exactly 2×), an
+   unmaintainable partial-index hack in the models, and a publish-gate deadlock that a
+   fully green test suite still missed.
+
+---
 
 ### 4.1 How did you make publishing atomic, and what happens if the process dies mid-publish?
 
@@ -350,6 +412,18 @@ rejected or corrected its output:
    unmaintainable. I rewrote it as a plain `Index(..., postgresql_where=text(...))` in
    `__table_args__`.
 
+The third one was mine, and it is the reason I ran the whole editor loop by hand instead
+of trusting a green test suite: `episodes.seed_issue` marks a row that arrived broken,
+the publish gate treated it as a blocker, and the gate cleared it only *after* the row
+passed — so the flag blocked its own removal and a flagged row could never be published
+no matter what an editor fixed. Every test passed, because every test asserted the
+refusal. It took walking the loop in a browser-adjacent way — upload the thumbnail the
+message asked for, then watch it refuse anyway — to see it. Two smaller versions of the
+same mistake turned up alongside it: the report told editors to put a fallback thumbnail
+on the show, and the CMS had no show-level thumbnail slot; and it told them to delete a
+bad row, and there was no delete button. **An error message naming an action the UI
+cannot perform is worse than no message.**
+
 Smaller ones: the generated catalogue checksum initially covered `generated_at`, which
 would have made idempotency unachievable — every republish would have looked like a
 change. And a first draft of the seed ingest "helpfully" skipped the duplicate row
@@ -358,7 +432,57 @@ report exists to surface.
 
 ---
 
-## 5. API
+## 5. The two frontends
+
+Both are React 18 + TypeScript + Vite + TanStack Query, served as static nginx images
+that proxy `/api` and `/media` to the API — so the browser never makes a cross-origin
+request and there is no CORS configuration to get wrong.
+
+**CMS (`:3000`) — for someone who does this fifty times a week.**
+
+- **Shows list** — debounced server-side search, filters for section / status / language
+  (composed with AND in SQL), server pagination. Filters live in the URL, so a filtered
+  view is a shareable link.
+- **New show** — title, synopsis, section. Starts as a draft and lands straight in the
+  editor, because a show is never finished at the moment it is created.
+- **Show editor** — details (title, synopsis, section, categories, featured), the three
+  labelled **artwork slots**, and seasons/episodes with inline add, rename, edit and
+  delete. Season 0 is labelled "shown as trailers, not a season" so nobody has to
+  remember the convention. Episode durations are typed as `mm:ss`. A row imported with a
+  problem is highlighted with the problem printed on it — and every action the report
+  tells an editor to take is one they can actually take here, including deleting a bad
+  row and putting a fallback thumbnail on the show.
+- **Artwork slots** state their required dimensions (read from `reference.json`),
+  pre-check the file in the browser for instant feedback, then **upload anyway and show
+  the server's verdict** — the client check is a convenience, the server is the
+  authority, and when they disagree it is the server's message that is displayed.
+- **Publish page** — the validation report grouped by show with deep links into the
+  editor, run history, and a publish button that is **disabled with the reasons listed
+  directly underneath it**. An editor sees the whole page with a permission-denied
+  panel: the report exists to tell them what to fix, so hiding it would defeat it.
+- **States** — every query renders loading / empty / error-with-retry; mutations disable
+  while pending and toast the outcome; a 401 drops the token and returns to login; a
+  403 renders inline rather than hiding the page.
+
+**Viewer (`:3001`) — reads the published catalogue and nothing else.**
+
+- **Home** — featured hero using the **banner**, horizontal scroll rows per section
+  using **posters**.
+- **Show detail** — banner header, synopsis, season tabs, episode list using
+  **thumbnails**. Season 0 never appears as a season; trailers get their own row. A
+  grouped episode shows its language badges and a toggle that swaps which variant's
+  metadata is displayed — the grouping has to be visible in the UI, not just in the JSON.
+- **Search** — debounced, server-side, with category and language filters whose options
+  come from the catalogue itself, and an empty state that suggests clearing a filter.
+- **Slow images** — one `<Artwork>` component used everywhere: the box reserves its
+  aspect ratio before the image arrives (no layout shift), images below the fold load
+  lazily, and a failed load becomes a titled tile rather than a broken-image icon.
+
+No video playback — the viewer is a browse surface, and playback is out of scope.
+
+---
+
+## 6. API
 
 Error shape is identical everywhere — one exception handler, one envelope:
 
@@ -373,12 +497,14 @@ than inventing its own copy. Messages are written once, on the server.
 |---|---|---|---|
 | POST | `/api/auth/login` | — | Returns a 12h JWT |
 | GET | `/api/auth/me` | user | |
+| GET | `/api/reference` | user | Sections, categories, languages, artwork specs — straight from `reference.json`, so the CMS restates none of them |
 | GET | `/api/shows` | user | `?q=&section=&status=&language=&page=&page_size=` — all compose with AND, paginated in SQL |
 | POST | `/api/shows` | user | |
 | GET | `/api/shows/{id}` | user | Embeds seasons + episodes + artwork (saves the CMS N requests) |
 | PATCH | `/api/shows/{id}` | user | `status: published` re-runs the publish gate |
 | DELETE | `/api/shows/{id}` | user | Cascades; storage objects deleted best-effort |
 | POST | `/api/shows/{id}/seasons` | user | |
+| PATCH | `/api/seasons/{id}` | user | |
 | DELETE | `/api/seasons/{id}` | user | |
 | POST | `/api/seasons/{id}/episodes` | user | |
 | PATCH | `/api/episodes/{id}` | user | |
@@ -432,7 +558,7 @@ autogenerated because Alembic's autogenerate doesn't reliably round-trip
 
 ---
 
-## 6. Pipeline and operability
+## 7. Pipeline and operability
 
 ### CI
 
@@ -441,7 +567,8 @@ autogenerated because Alembic's autogenerate doesn't reliably round-trip
 - **backend** — `ruff check`, `ruff format --check`, `alembic upgrade head` against a
   real Postgres service container (so migrations are proven to apply, not just to
   parse), then `pytest`.
-- **frontend** — matrix over both apps: `npm install`, `typecheck`, `lint`, `build`.
+- **frontend** — matrix over both apps: `npm ci` (the committed lockfile is the input,
+  so CI tests the tree that ships), `typecheck`, `lint`, `build`.
 - **images** — `docker compose build`, proving every Dockerfile builds.
 - **deploy** — written out in full, gated `if: false`. It logs into GHCR and pushes the
   three images; the steps after that are commented because they're platform-specific.
@@ -501,7 +628,7 @@ day wondering why their changes aren't live. That's a ticket, not a page.
 
 ---
 
-## 7. Verification performed
+## 8. Verification performed
 
 - `ruff check` and `ruff format --check` clean across the backend.
 - Both frontends build under `tsc` strict mode with `noUnusedLocals`.
@@ -523,32 +650,36 @@ volume, with no `.env` file present:
 
 | Check | Result |
 |---|---|
-| `docker compose up --build` from zero (no `.env`, volumes removed) | all four services healthy in **35-50s** (measured across four clean runs) |
+| `docker compose up --build` from zero (no `.env`, `down -v` first) | db, api, cms and viewer all answering 200 in **17–18s** with a warm build cache; api reports `healthy`. A reviewer's *first* build has to pull base images and run `pip install` / `npm ci`, which is a few minutes of one-time work before that 17s. |
 | Migrations on an empty database | `Running upgrade -> 0001, initial schema`, clean |
-| Seed ingest | 8 shows, 10 seasons, **95 episodes** |
-| Planted defect — `ep_0036` missing artwork | quarantined, blocks publish |
-| Planted defect — `ep_9001` duplicate `content_group` | quarantined, blocks publish |
-| Planted defect — `rhyme-rangers` missing section | stays `draft`, section shows `— none —` |
-| Initial autopublish | 7 shows, 65 entries |
-| `GET /api/catalog` | 200, 4 sections; `If-None-Match` → **304** |
-| Artwork upload, all 6 fixtures | 1 accepted (201), 5 rejected (422) with specific codes |
-| Uploaded file served back | 200 `image/jpeg`, via API **and** through the nginx proxy |
-| Role enforcement | editor publish → **403**, anonymous → **401** |
-| Publish gate | correctly refused with the 3 blockers listed |
-| `pytest` inside the container | **60 passed** |
-| Viewer and CMS in a real browser | both render, **zero console errors** |
+| Seed ingest | 8 shows, 10 seasons, **95 episodes**, 2 findings logged |
+| Planted defect — `ep_0036` missing artwork | quarantined `draft`, blocks publish |
+| Planted defect — `ep_9001` duplicate `content_group` | quarantined `draft`, blocks publish |
+| Planted defect — `rhyme-rangers` missing section | stays `draft`; listed in the report as 2 **warnings**; `— none —` in the CMS list |
+| Initial autopublish | 7 shows, 65 entries, 4 sections in `reference.json` order |
+| `GET /api/catalog` | 200; `If-None-Match` → **304** |
+| Artwork upload, all 6 fixtures into the **poster** slot | only `poster_good.jpg` accepted (201); the other five 422 |
+| Artwork upload, each fixture into its **matching** slot | 3 good accepted (201); `poster_wrong_ratio` → `wrong_aspect_ratio`, `banner_too_big` → `wrong_dimensions`, `thumb_tiny` → `wrong_dimensions` |
+| Uploaded file served back | 200 `image/jpeg`, via the API **and** through the nginx proxy |
+| Role enforcement | editor publish → **403**; anonymous CRUD → **401**; anonymous `/api/catalog` → **200**; auth enforced through the proxy too |
+| Publish gate | refused with the 3 blockers listed |
+| **The whole editor loop** | blocked → upload wrong asset (422, readable) → upload right asset (201) → episode publishes → delete the bad re-upload → report clears → **publish succeeds** (7 shows, 66 entries) → **republish unchanged → `noop`** → the fixed episode is in `GET /api/catalog` |
+| Create flows | show → season → rename season → episode, all via the API the CMS uses; duplicate `(content_group, language)` → **409** |
+| `pytest` inside the container | **70 passed** |
+| Viewer and CMS in a real browser | home, show detail (trailers row + EN/HI toggles), search with filters, CMS list, show editor and publish page all render, **zero console errors** |
 
 One quirk worth naming, since it looks inconsistent at first glance: **the startup
 autopublish bypasses the validation gate that the admin endpoint enforces.** Seeding
 calls `publish()` directly, so `docker compose up` always yields a populated viewer;
 pressing *Publish catalogue* in the CMS runs `collect_issues()` first and refuses while
-the three seeded blockers stand. That is deliberate — a reviewer should see a working
+the three seeded blockers stand (that gap is exactly the demo: 65 entries at boot, 66
+once an editor resolves them). That is deliberate — a reviewer should see a working
 catalogue immediately, but a human-initiated publish should not quietly ship content an
 editor has not resolved. The bootstrap publishes only the valid subset either way.
 
 ---
 
-## 8. Time spent
+## 9. Time spent
 
 | Phase | Time |
 |---|---|
@@ -564,6 +695,7 @@ editor has not resolved. The bootstrap publishes only the valid subset either wa
 | CI, compose, `.env.example` | 25 min |
 | README + written answers | 30 min |
 | Docker verification + fixes it surfaced | 50 min |
+| Final pass: re-read the brief line by line against the built system, fixed the gaps it found (D-012 to D-015) | 60 min |
 
 **The note on environment setup.** The machine I built this on had no Docker and no WSL,
 and I could not assume I would get them. Rather than develop against SQLite and hope the

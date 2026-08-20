@@ -84,10 +84,14 @@ export interface Episode {
   artwork: Record<string, ArtworkRecord>
 }
 
-export interface Season {
+/** What PATCH /seasons/{id} returns — no episodes, because it does not touch them. */
+export interface SeasonSummary {
   id: number
   number: number
   title: string | null
+}
+
+export interface Season extends SeasonSummary {
   episodes: Episode[]
 }
 
@@ -118,6 +122,20 @@ export interface ShowListItem {
   artwork: Record<string, ArtworkRecord>
 }
 
+export interface ArtworkSpec {
+  aspect: string
+  target_px: [number, number]
+  max_kb: number
+}
+
+/** `reference.json`, served by the API. The CMS restates none of it. */
+export interface ReferenceConfig {
+  sections: string[]
+  categories: string[]
+  languages: string[]
+  artwork_specs: Record<'poster' | 'banner' | 'thumbnail', ArtworkSpec>
+}
+
 export interface Issue {
   code: string
   severity: 'blocker' | 'warning'
@@ -133,6 +151,7 @@ export interface ValidationReport {
     show_id: number
     title: string
     section: string | null
+    status: 'draft' | 'published'
     blocker_count: number
     warning_count: number
     issues: Issue[]
@@ -168,6 +187,8 @@ export const api = {
 
   me: () => request<Me>('/api/auth/me'),
 
+  reference: () => request<ReferenceConfig>('/api/reference'),
+
   listShows: (params: Record<string, string | number | undefined>) => {
     const qs = new URLSearchParams()
     for (const [k, v] of Object.entries(params)) {
@@ -183,6 +204,29 @@ export const api = {
   },
 
   getShow: (id: number) => request<ShowDetail>(`/api/shows/${id}`),
+
+  createShow: (body: Record<string, unknown>) =>
+    request<ShowDetail>('/api/shows', { method: 'POST', body: JSON.stringify(body) }),
+
+  createSeason: (showId: number, body: Record<string, unknown>) =>
+    request<Season>(`/api/shows/${showId}/seasons`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  patchSeason: (id: number, body: Record<string, unknown>) =>
+    request<SeasonSummary>(`/api/seasons/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  createEpisode: (seasonId: number, body: Record<string, unknown>) =>
+    request<Episode>(`/api/seasons/${seasonId}/episodes`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  deleteEpisode: (id: number) => request<void>(`/api/episodes/${id}`, { method: 'DELETE' }),
 
   patchShow: (id: number, body: Record<string, unknown>) =>
     request<ShowDetail>(`/api/shows/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),

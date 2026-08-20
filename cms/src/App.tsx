@@ -15,6 +15,8 @@ import {
   tokenStore,
   type Issue,
   type Me,
+  type ReferenceConfig,
+  type Season,
   type ShowDetail,
 } from './api'
 import {
@@ -29,14 +31,23 @@ import {
   parseDuration,
 } from './components'
 
-// reference.json values are served to the UI by the API rather than duplicated here,
-// so adding a section or language never requires a frontend change.
-const SECTIONS = ['featured', 'series', 'minisodes', 'songs']
-const LANGUAGES = ['en', 'hi']
-const SPECS = {
-  poster: { target_px: [600, 900] as [number, number], aspect: '2:3', max_kb: 200 },
-  banner: { target_px: [1280, 720] as [number, number], aspect: '16:9', max_kb: 200 },
-  thumbnail: { target_px: [640, 360] as [number, number], aspect: '16:9', max_kb: 200 },
+/**
+ * Sections, languages and artwork specs come from `reference.json`, served by
+ * `GET /api/reference`. Nothing in this app restates them — adding a language or
+ * retargeting a poster size is a change to that one file, not a frontend deploy.
+ */
+function useReference() {
+  return useQuery({ queryKey: ['reference'], queryFn: api.reference, staleTime: Infinity })
+}
+
+/** Keeps typing smooth while the server sees one request per pause, not one per key. */
+function useDebounced<T>(value: T, ms = 300): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), ms)
+    return () => clearTimeout(timer)
+  }, [value, ms])
+  return debounced
 }
 
 function useToast() {
@@ -104,11 +115,25 @@ function Login({ onLogin }: { onLogin: (me: Me) => void }) {
 // -------------------------------------------------------------------- shows list
 function ShowsList() {
   const [params, setParams] = useSearchParams()
-  const q = params.get('q') ?? ''
   const section = params.get('section') ?? ''
   const status = params.get('status') ?? ''
   const language = params.get('language') ?? ''
   const page = Number(params.get('page') ?? '1')
+  const reference = useReference()
+
+  // The box is driven locally and pushed to the URL after a pause: typing stays smooth,
+  // the URL stays shareable, and Back doesn't walk through every half-typed query.
+  const [typed, setTyped] = useState(params.get('q') ?? '')
+  const q = useDebounced(typed)
+
+  useEffect(() => {
+    if (q === (params.get('q') ?? '')) return
+    const next = new URLSearchParams(params)
+    if (q) next.set('q', q)
+    else next.delete('q')
+    next.delete('page')
+    setParams(next, { replace: true })
+  }, [q, params, setParams])
 
   const query = useQuery({
     queryKey: ['shows', q, section, status, language, page],
@@ -127,17 +152,20 @@ function ShowsList() {
     <div>
       <div className="page-head">
         <h1>Shows</h1>
+        <Link className="btn primary" to="/shows/new">
+          New show
+        </Link>
       </div>
 
       <div className="filters">
         <input
           placeholder="Search titles…"
-          value={q}
-          onChange={(e) => update('q', e.target.value)}
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
         />
         <select value={section} onChange={(e) => update('section', e.target.value)}>
           <option value="">All sections</option>
-          {SECTIONS.map((s) => (
+          {(reference.data?.sections ?? []).map((s) => (
             <option key={s} value={s}>
               {s}
             </option>
@@ -150,7 +178,7 @@ function ShowsList() {
         </select>
         <select value={language} onChange={(e) => update('language', e.target.value)}>
           <option value="">Any language</option>
-          {LANGUAGES.map((l) => (
+          {(reference.data?.languages ?? []).map((l) => (
             <option key={l} value={l}>
               {l}
             </option>
@@ -227,13 +255,90 @@ function ShowsList() {
   )
 }
 
+// -------------------------------------------------------------------- create show
+function NewShow() {
+  const navigate = useNavigate()
+  const qc = useQueryClient()
+  const reference = useReference()
+  const [title, setTitle] = useState('')
+  const [synopsis, setSynopsis] = useState('')
+  const [section, setSection] = useState('')
+  const [error, setError] = useState<string | null>(null)
+
+  const create = useMutation({
+    mutationFn: () =>
+      api.createShow({ title: title.trim(), synopsis: synopsis || null, section: section || null }),
+    onSuccess: (show) => {
+      void qc.invalidateQueries({ queryKey: ['shows'] })
+      // Straight into the editor: a show is never finished at the moment it is created,
+      // and artwork and episodes are the next thing an editor needs.
+      navigate(`/shows/${show.id}`)
+    },
+    onError: (e) => setError((e as ApiError).message),
+  })
+
+  return (
+    <div>
+      <div className="page-head">
+        <div>
+          <Link to="/shows" className="muted small">
+            ← All shows
+          </Link>
+          <h1>New show</h1>
+        </div>
+      </div>
+
+      <section className="panel">
+        <div className="form">
+          <label>
+            Title
+            <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
+          </label>
+          <label>
+            Synopsis
+            <textarea rows={3} value={synopsis} onChange={(e) => setSynopsis(e.target.value)} />
+          </label>
+          <label>
+            Section
+            <select value={section} onChange={(e) => setSection(e.target.value)}>
+              <option value="">— choose later —</option>
+              {(reference.data?.sections ?? []).map((sec) => (
+                <option key={sec} value={sec}>
+                  {sec}
+                </option>
+              ))}
+            </select>
+          </label>
+          {error && <p className="err small">{error}</p>}
+          <button
+            className="btn primary"
+            disabled={!title.trim() || create.isPending}
+            onClick={() => {
+              setError(null)
+              create.mutate()
+            }}
+          >
+            {create.isPending ? 'Creating…' : 'Create show'}
+          </button>
+          <p className="muted small">
+            New shows start as drafts. Add artwork, seasons and episodes on the next
+            screen, then publish when the checks pass.
+          </p>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 // ------------------------------------------------------------------- show editor
 function EpisodeEditor({
   episode,
+  reference,
   onSaved,
   notify,
 }: {
   episode: ShowDetail['seasons'][number]['episodes'][number]
+  reference: ReferenceConfig
   onSaved: () => void
   notify: (kind: 'ok' | 'err', text: string) => void
 }) {
@@ -257,6 +362,18 @@ function EpisodeEditor({
       setIssues(details?.issues ?? [])
       notify('err', err.message)
     },
+  })
+
+  // The report tells editors to "fix it or delete it" for a row that arrived broken,
+  // so deleting has to be something they can actually do. Confirmed, because it isn't
+  // undoable.
+  const remove = useMutation({
+    mutationFn: () => api.deleteEpisode(episode.id),
+    onSuccess: () => {
+      notify('ok', `Deleted '${episode.title}'.`)
+      onSaved()
+    },
+    onError: (e) => notify('err', (e as ApiError).message),
   })
 
   return (
@@ -318,7 +435,7 @@ function EpisodeEditor({
           <label>
             Language
             <select value={language} onChange={(e) => setLanguage(e.target.value)}>
-              {LANGUAGES.map((l) => (
+              {reference.languages.map((l) => (
                 <option key={l} value={l}>
                   {l}
                 </option>
@@ -342,32 +459,269 @@ function EpisodeEditor({
             ownerType="episode"
             ownerId={episode.id}
             current={episode.artwork.thumbnail}
-            spec={SPECS.thumbnail}
+            spec={reference.artwork_specs.thumbnail}
             onUploaded={onSaved}
           />
 
-          <button
-            className="btn primary"
-            disabled={save.isPending}
-            onClick={() => {
-              const parsed = parseDuration(duration)
-              if (duration.trim() && parsed === null) {
-                notify('err', 'Enter the duration as minutes and seconds, like 8:30.')
-                return
-              }
-              save.mutate({
-                title,
-                language,
-                duration_seconds: parsed,
-                content_group: contentGroup.trim() || null,
-              })
-            }}
-          >
-            {save.isPending ? 'Saving…' : 'Save episode'}
-          </button>
+          <div className="head-actions">
+            <button
+              className="btn primary"
+              disabled={save.isPending}
+              onClick={() => {
+                const parsed = parseDuration(duration)
+                if (duration.trim() && parsed === null) {
+                  notify('err', 'Enter the duration as minutes and seconds, like 8:30.')
+                  return
+                }
+                save.mutate({
+                  title,
+                  language,
+                  duration_seconds: parsed,
+                  content_group: contentGroup.trim() || null,
+                })
+              }}
+            >
+              {save.isPending ? 'Saving…' : 'Save episode'}
+            </button>
+            <button
+              className="btn danger"
+              disabled={remove.isPending}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Delete '${episode.title}'? This removes the episode and its ` +
+                      `artwork, and can't be undone.`,
+                  )
+                ) {
+                  remove.mutate()
+                }
+              }}
+            >
+              {remove.isPending ? 'Deleting…' : 'Delete episode'}
+            </button>
+          </div>
         </div>
       )}
     </li>
+  )
+}
+
+/** Inline "add an episode" form, one per season. */
+function AddEpisode({
+  season,
+  reference,
+  onAdded,
+  notify,
+}: {
+  season: Season
+  reference: ReferenceConfig
+  onAdded: () => void
+  notify: (kind: 'ok' | 'err', text: string) => void
+}) {
+  const nextNumber = Math.max(0, ...season.episodes.map((e) => e.number)) + 1
+  const [open, setOpen] = useState(false)
+  const [number, setNumber] = useState(String(nextNumber))
+  const [title, setTitle] = useState('')
+  const [language, setLanguage] = useState(reference.languages[0] ?? 'en')
+  const [duration, setDuration] = useState('')
+  const [contentGroup, setContentGroup] = useState('')
+
+  const create = useMutation({
+    mutationFn: (body: Record<string, unknown>) => api.createEpisode(season.id, body),
+    onSuccess: () => {
+      setOpen(false)
+      setTitle('')
+      setDuration('')
+      setContentGroup('')
+      setNumber(String(nextNumber + 1))
+      notify('ok', 'Episode added as a draft.')
+      onAdded()
+    },
+    onError: (e) => notify('err', (e as ApiError).message),
+  })
+
+  if (!open) {
+    return (
+      <button className="btn small" onClick={() => setOpen(true)}>
+        + Add episode
+      </button>
+    )
+  }
+
+  return (
+    <div className="episode-form add-form">
+      <label>
+        Number
+        <input value={number} onChange={(e) => setNumber(e.target.value)} />
+      </label>
+      <label>
+        Title
+        <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
+      </label>
+      <label>
+        Duration (mm:ss)
+        <input value={duration} placeholder="8:30" onChange={(e) => setDuration(e.target.value)} />
+      </label>
+      <label>
+        Language
+        <select value={language} onChange={(e) => setLanguage(e.target.value)}>
+          {reference.languages.map((l) => (
+            <option key={l} value={l}>
+              {l}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Content group
+        <input
+          value={contentGroup}
+          placeholder="shared id for language variants"
+          onChange={(e) => setContentGroup(e.target.value)}
+        />
+        <span className="muted small">
+          Leave blank unless this is a language variant of another episode.
+        </span>
+      </label>
+      <div className="head-actions">
+        <button
+          className="btn primary"
+          disabled={!title.trim() || create.isPending}
+          onClick={() => {
+            const parsedNumber = Number(number)
+            if (!Number.isInteger(parsedNumber) || parsedNumber < 0) {
+              notify('err', 'Episode number has to be a whole number, like 4.')
+              return
+            }
+            const parsed = parseDuration(duration)
+            if (duration.trim() && parsed === null) {
+              notify('err', 'Enter the duration as minutes and seconds, like 8:30.')
+              return
+            }
+            create.mutate({
+              number: parsedNumber,
+              title: title.trim(),
+              language,
+              duration_seconds: parsed,
+              content_group: contentGroup.trim() || null,
+            })
+          }}
+        >
+          {create.isPending ? 'Adding…' : 'Add episode'}
+        </button>
+        <button className="btn" onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/** The season heading, with its title editable in place. */
+function SeasonHeading({
+  season,
+  onSaved,
+  notify,
+}: {
+  season: Season
+  onSaved: () => void
+  notify: (kind: 'ok' | 'err', text: string) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [title, setTitle] = useState(season.title ?? '')
+
+  const save = useMutation({
+    mutationFn: () => api.patchSeason(season.id, { title: title.trim() || null }),
+    onSuccess: () => {
+      setEditing(false)
+      notify('ok', 'Season renamed.')
+      onSaved()
+    },
+    onError: (e) => notify('err', (e as ApiError).message),
+  })
+
+  if (editing) {
+    return (
+      <div className="add-row">
+        <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
+        <button className="btn small" disabled={save.isPending} onClick={() => save.mutate()}>
+          Save
+        </button>
+        <button className="btn small" onClick={() => setEditing(false)}>
+          Cancel
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <h3>
+      {season.number === 0 ? 'Season 0 — Trailers' : (season.title ?? `Season ${season.number}`)}
+      {season.number === 0 && (
+        <span className="muted small"> (shown as trailers, not a season)</span>
+      )}{' '}
+      <button className="linkish small" onClick={() => setEditing(true)}>
+        rename
+      </button>
+    </h3>
+  )
+}
+
+/** Inline "add a season" form. Season 0 is offered explicitly, and labelled. */
+function AddSeason({
+  show,
+  onAdded,
+  notify,
+}: {
+  show: ShowDetail
+  onAdded: () => void
+  notify: (kind: 'ok' | 'err', text: string) => void
+}) {
+  const taken = new Set(show.seasons.map((s) => s.number))
+  const suggested = show.seasons.length === 0 ? 1 : Math.max(...show.seasons.map((s) => s.number)) + 1
+  const [number, setNumber] = useState(String(suggested))
+
+  const create = useMutation({
+    mutationFn: (n: number) =>
+      api.createSeason(show.id, { number: n, title: n === 0 ? 'Trailers' : `Season ${n}` }),
+    onSuccess: (_created, n) => {
+      setNumber(String(n + 1))
+      notify('ok', 'Season added.')
+      onAdded()
+    },
+    onError: (e) => notify('err', (e as ApiError).message),
+  })
+
+  return (
+    <div className="add-row">
+      <label className="inline">
+        Season number
+        <input
+          value={number}
+          onChange={(e) => setNumber(e.target.value)}
+          style={{ width: '70px' }}
+        />
+      </label>
+      <button
+        className="btn small"
+        disabled={create.isPending}
+        onClick={() => {
+          const n = Number(number)
+          if (!Number.isInteger(n) || n < 0) {
+            notify('err', 'Season number has to be 0 or more. Season 0 is for trailers.')
+            return
+          }
+          if (taken.has(n)) {
+            notify('err', `This show already has a season ${n}.`)
+            return
+          }
+          create.mutate(n)
+        }}
+      >
+        + Add season
+      </button>
+      <span className="muted small">Season 0 is reserved for trailers.</span>
+    </div>
   )
 }
 
@@ -379,6 +733,7 @@ function ShowEditor({ me }: { me: Me }) {
   const notify = (kind: 'ok' | 'err', text: string) => setToast({ kind, text })
 
   const query = useQuery({ queryKey: ['show', showId], queryFn: () => api.getShow(showId) })
+  const referenceQuery = useReference()
   const [issues, setIssues] = useState<Issue[]>([])
 
   const save = useMutation({
@@ -397,10 +752,18 @@ function ShowEditor({ me }: { me: Me }) {
     },
   })
 
-  if (query.isLoading) return <Loading />
+  if (query.isLoading || referenceQuery.isLoading) return <Loading />
   if (query.isError)
     return <ErrorState message={(query.error as Error).message} onRetry={() => query.refetch()} />
+  if (referenceQuery.isError)
+    return (
+      <ErrorState
+        message={(referenceQuery.error as Error).message}
+        onRetry={() => referenceQuery.refetch()}
+      />
+    )
   const show = query.data!
+  const reference = referenceQuery.data!
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['show', showId] })
@@ -452,7 +815,12 @@ function ShowEditor({ me }: { me: Me }) {
       <div className="grid-2">
         <section className="panel">
           <h2>Details</h2>
-          <ShowForm show={show} onSave={(body) => save.mutate(body)} saving={save.isPending} />
+          <ShowForm
+            show={show}
+            reference={reference}
+            onSave={(body) => save.mutate(body)}
+            saving={save.isPending}
+          />
         </section>
 
         <section className="panel">
@@ -463,7 +831,7 @@ function ShowEditor({ me }: { me: Me }) {
               ownerType="show"
               ownerId={show.id}
               current={show.artwork.poster}
-              spec={SPECS.poster}
+              spec={reference.artwork_specs.poster}
               onUploaded={refresh}
             />
             <ArtworkSlot
@@ -471,31 +839,56 @@ function ShowEditor({ me }: { me: Me }) {
               ownerType="show"
               ownerId={show.id}
               current={show.artwork.banner}
-              spec={SPECS.banner}
+              spec={reference.artwork_specs.banner}
               onUploaded={refresh}
             />
+            <ArtworkSlot
+              kind="thumbnail"
+              ownerType="show"
+              ownerId={show.id}
+              current={show.artwork.thumbnail}
+              spec={reference.artwork_specs.thumbnail}
+              onUploaded={refresh}
+            />
+            <p className="muted small">
+              Poster and banner are required to publish. A thumbnail here is optional —
+              it stands in for any episode that has none of its own, which is usually
+              faster than uploading the same picture onto twenty episodes.
+            </p>
           </div>
         </section>
       </div>
 
       <section className="panel">
         <h2>Seasons &amp; episodes</h2>
-        {show.seasons.length === 0 && <EmptyState message="This show has no seasons yet." />}
+        {show.seasons.length === 0 && (
+          <EmptyState message="This show has no seasons yet — add one to start adding episodes." />
+        )}
         {show.seasons.map((season) => (
           <div key={season.id} className="season">
-            <h3>
-              {season.number === 0 ? 'Season 0 — Trailers' : (season.title ?? `Season ${season.number}`)}
-              {season.number === 0 && (
-                <span className="muted small"> (shown as trailers, not a season)</span>
-              )}
-            </h3>
+            <SeasonHeading season={season} onSaved={refresh} notify={notify} />
             <ul className="episodes">
               {season.episodes.map((ep) => (
-                <EpisodeEditor key={ep.id} episode={ep} onSaved={refresh} notify={notify} />
+                <EpisodeEditor
+                  key={ep.id}
+                  episode={ep}
+                  reference={reference}
+                  onSaved={refresh}
+                  notify={notify}
+                />
               ))}
             </ul>
+            <div className="add-row">
+              <AddEpisode
+                season={season}
+                reference={reference}
+                onAdded={refresh}
+                notify={notify}
+              />
+            </div>
           </div>
         ))}
+        <AddSeason show={show} onAdded={refresh} notify={notify} />
       </section>
 
       {me.role !== 'admin' && (
@@ -510,10 +903,12 @@ function ShowEditor({ me }: { me: Me }) {
 
 function ShowForm({
   show,
+  reference,
   onSave,
   saving,
 }: {
   show: ShowDetail
+  reference: ReferenceConfig
   onSave: (body: Record<string, unknown>) => void
   saving: boolean
 }) {
@@ -521,6 +916,7 @@ function ShowForm({
   const [synopsis, setSynopsis] = useState(show.synopsis ?? '')
   const [section, setSection] = useState(show.section ?? '')
   const [featured, setFeatured] = useState(show.featured)
+  const [categories, setCategories] = useState<string[]>(show.categories)
 
   return (
     <div className="form">
@@ -536,7 +932,7 @@ function ShowForm({
         Section
         <select value={section} onChange={(e) => setSection(e.target.value)}>
           <option value="">— none —</option>
-          {SECTIONS.map((s) => (
+          {reference.sections.map((s) => (
             <option key={s} value={s}>
               {s}
             </option>
@@ -548,6 +944,28 @@ function ShowForm({
           </span>
         )}
       </label>
+      <fieldset className="checks-field">
+        <legend>Categories</legend>
+        <div className="checks">
+          {reference.categories.map((c) => (
+            <label key={c} className="inline">
+              <input
+                type="checkbox"
+                checked={categories.includes(c)}
+                onChange={(e) =>
+                  setCategories((prev) =>
+                    e.target.checked
+                      ? [...prev, c].sort()
+                      : prev.filter((existing) => existing !== c),
+                  )
+                }
+              />
+              {c}
+            </label>
+          ))}
+        </div>
+        <span className="muted small">Categories drive the viewer's filters and search.</span>
+      </fieldset>
       <label className="inline">
         <input
           type="checkbox"
@@ -564,6 +982,7 @@ function ShowForm({
             title,
             synopsis: synopsis || null,
             section: section || null,
+            categories,
             featured,
           })
         }
@@ -675,11 +1094,17 @@ function PublishPage({ me }: { me: Me }) {
 
           <section className="panel">
             <h2>By show</h2>
+            <p className="muted small">
+              Draft shows are listed too. A draft can't block a publish it isn't part of,
+              so its problems appear as warnings — that list is what it would take to
+              bring the show live.
+            </p>
             {report.data.shows.length === 0 && <EmptyState message="Nothing to fix." />}
             {report.data.shows.map((s) => (
               <div key={s.show_id} className="report-show">
                 <h3>
                   <Link to={`/shows/${s.show_id}`}>{s.title}</Link>{' '}
+                  {s.status === 'draft' && <span className="chip draft">draft</span>}{' '}
                   <span className="muted small">
                     {plural(s.blocker_count, 'blocker')} · {plural(s.warning_count, 'warning')}
                   </span>
@@ -798,6 +1223,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/shows" replace />} />
           <Route path="/shows" element={<ShowsList />} />
+          <Route path="/shows/new" element={<NewShow />} />
           <Route path="/shows/:id" element={<ShowEditor me={me} />} />
           <Route path="/publish" element={<PublishPage me={me} />} />
         </Routes>
